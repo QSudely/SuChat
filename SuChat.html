@@ -2,6 +2,9 @@
 <html lang="zh-CN" data-theme="dark" class=""><head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>SuChat</title>
     <script>
         // 尽早应用保存的主题，避免暗色闪烁
@@ -337,7 +340,20 @@
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
+            -webkit-tap-highlight-color: transparent !important;
+            -webkit-tap-highlight-color: rgba(0,0,0,0);
+            tap-highlight-color: transparent;
+            -webkit-user-drag: none;
+        }
+        /* ===== 应用容器内点击黄框 / 焦点环 / 选择高亮 彻底禁用 ===== */
+        *:focus,
+        *:active,
+        *:focus-visible,
+        *:focus-within {
+            outline: none !important;
+            outline-color: transparent !important;
+            -webkit-tap-highlight-color: transparent !important;
+            box-shadow: none !important;
         }
         html,
         body {
@@ -345,12 +361,31 @@
             width: 100%;
             overflow: hidden;
             background: var(--c-bg-page);
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent !important;
             font-family: 'Segoe UI', system-ui, sans-serif;
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             bottom: 0;
+        }
+        /* 交互类控件保留正常文字选择与光标（其他全局已禁文字选中） */
+        input, textarea, select, option, [contenteditable="true"] {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+        /* 文本选择时改成低饱和品牌色半透明，彻底不出现 Android 默认刺眼黄框 */
+        ::selection      { background: rgba(90, 111, 255, 0.22); color: inherit; }
+        ::-moz-selection { background: rgba(90, 111, 255, 0.22); color: inherit; }
+        input::selection, textarea::selection { background: rgba(90, 111, 255, 0.3); }
+        /* 高频点击元素二次兜底，杜绝 tap-highlight 黄框 */
+        a, button, [role="button"], .btn, .tab, .pf-switch-row, .menu-item,
+        .nav-btn, .msg, .bubble-row, .icon-btn, .chip, .bottom-tab {
+            -webkit-tap-highlight-color: transparent !important;
+            -webkit-tap-highlight-color: rgba(0,0,0,0);
         }
         .app {
             display: flex;
@@ -932,6 +967,81 @@
         }
         #pageProfile .pf-reset-btn:active {
             transform: scale(0.95);
+        }
+        #pageProfile .pf-import-btn,
+        #pageProfile .pf-export-btn {
+            display: block;
+            width: 100%;
+            padding: 8px 0;
+            border-radius: 10px;
+            border: 1px solid var(--c-border);
+            font-size: 14px;
+            cursor: pointer;
+            font-family: inherit;
+            background: var(--c-bg-card);
+            color: var(--c-text-2);
+            font-weight: 500;
+        }
+        #pageProfile .pf-import-btn:hover,
+        #pageProfile .pf-export-btn:hover {
+            background: var(--c-bg-hover);
+        }
+        #pageProfile .pf-import-btn:active,
+        #pageProfile .pf-export-btn:active {
+            transform: scale(0.96);
+        }
+        #pageProfile .pf-btn-row {
+            display: flex;
+            gap: 10px;
+        }
+        #pageProfile .pf-btn-row > * {
+            flex: 1 1 0;
+            min-width: 0;
+        }
+        #pageProfile .pf-switch-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 4px 2px;
+            cursor: pointer;
+            user-select: none;
+        }
+        #pageProfile .pf-switch-label {
+            font-size: 14px;
+            color: var(--c-text-2);
+            font-weight: 500;
+        }
+        #pageProfile .pf-switch {
+            position: relative;
+            flex-shrink: 0;
+            width: 40px;
+            height: 22px;
+            border-radius: 999px;
+            background: var(--c-switch-off, #8b8fa0);
+            transition: background .2s ease;
+        }
+        #pageProfile .pf-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px; left: 2px;
+            width: 18px; height: 18px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 1px 3px rgba(0,0,0,.25);
+            transition: left .2s ease, transform .2s ease;
+        }
+        #pageProfile .pf-switch-row.on .pf-switch {
+            background: var(--c-switch-on, #5a6fff);
+        }
+        #pageProfile .pf-switch-row.on .pf-switch::after {
+            left: 20px;
+        }
+        html[data-theme="light"] #pageProfile .pf-switch {
+            --c-switch-off: #c5c9d6;
+        }
+        html[data-theme="light"] #pageProfile .pf-switch-row.on .pf-switch {
+            --c-switch-on: #5a6fff;
         }
         #pageProfile .pf-about-btn {
             display: block;
@@ -5426,15 +5536,28 @@
                 <button class="manage-files-btn" id="manageFilesBtn">📂 管理文件</button>
             </div>
 
-            <!-- 重置账号 -->
-            <div class="pf-card">
+            <!-- 关于账号 -->
+            <div class="pf-card" style="display:flex;flex-direction:column;gap:10px;">
+                <div class="pf-section-title">—— 关于账号 ——</div>
+                <div class="pf-btn-row">
+                    <button id="profileImportBtn" class="pf-import-btn">📥 导入账号</button>
+                    <button id="profileExportBtn" class="pf-export-btn">📤 导出账号</button>
+                </div>
                 <button id="profileResetBtn" class="pf-reset-btn">重置账号</button>
             </div>
 
-            <!-- 关于应用 -->
-            <div class="pf-card">
+            <!-- 应用 -->
+            <div class="pf-card" style="display:flex;flex-direction:column;gap:10px;">
+                <div class="pf-section-title">—— 应用 ——</div>
+                <div class="pf-switch-row on" id="fullscreenSwitch" title="点击切换全屏">
+                    <span class="pf-switch-label">点击页面全屏</span>
+                    <div class="pf-switch" aria-hidden="true"></div>
+                </div>
                 <button id="profileAboutBtn" class="pf-about-btn"><span class="pf-about-icon">!</span>关于应用</button>
             </div>
+
+            <!-- 隐藏的文件输入（账号导入） -->
+            <input type="file" id="profileAccountImportInput" accept="application/json,.json" style="display:none;" />
 
             <!-- 签名小字 -->
             <div class="pf-footer">
@@ -13009,6 +13132,262 @@
                 }, 500);
             });
 
+            // ====== 账号导出 ======
+            const profileExportBtn = document.getElementById('profileExportBtn');
+            if (profileExportBtn) {
+                profileExportBtn.addEventListener('click', async function () {
+                    try {
+                        showToast('正在打包账号数据…');
+                        // 主数据（不含二进制 blob）
+                        const metaObj = await idbMetaGet();
+                        // 表情包
+                        const stkList = typeof stickers !== 'undefined' ? stickers : (metaObj && metaObj.stickers ? metaObj.stickers : []);
+                        const stkBlobs = [];
+                        for (const stk of stkList) {
+                            if (!stk) continue;
+                            if (stk.data) {
+                                stkBlobs.push({ id: stk.id, blob: null, data: stk.data });
+                                continue;
+                            }
+                            try {
+                                const b = await idbStickerGet(stk.id);
+                                stkBlobs.push({ id: stk.id, blob: b ? await b.arrayBuffer() : null, data: null });
+                            } catch (e) {
+                                stkBlobs.push({ id: stk.id, blob: null, data: null });
+                            }
+                        }
+                        const pkg = {
+                            _app: 'SuChat',
+                            _kind: 'account-backup',
+                            _version: 1,
+                            _exportedAt: new Date().toISOString(),
+                            meta: metaObj || {
+                                sessions, friends, friendRequests, sentRequests,
+                                chatBackgrounds, stickers: (stkList||[]).map(s=>({ id: s.id, name: s.name, isGif: !!s.isGif, type: s.type })),
+                                myName, myAvatar, myPeerId, plugins
+                            },
+                            stickers: stkBlobs
+                        };
+                        const json = JSON.stringify(pkg, function (k, v) {
+                            if (v instanceof ArrayBuffer) {
+                                const bytes = new Uint8Array(v);
+                                let bin = '';
+                                for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+                                return 'b64:' + btoa(bin);
+                            }
+                            return v;
+                        }, 2);
+                        const blob = new Blob([json], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        const safeId = (myPeerId || 'my').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 12);
+                        const stamp = new Date();
+                        const yyyy = stamp.getFullYear();
+                        const mm = String(stamp.getMonth()+1).padStart(2,'0');
+                        const dd = String(stamp.getDate()).padStart(2,'0');
+                        const hh = String(stamp.getHours()).padStart(2,'0');
+                        const mi = String(stamp.getMinutes()).padStart(2,'0');
+                        a.href = url;
+                        a.download = `SuChat-账号备份-${safeId}-${yyyy}${mm}${dd}-${hh}${mi}.json`;
+                        document.body.appendChild(a);
+                        a.click();
+                        setTimeout(() => {
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                        }, 1000);
+                        showToast('✅ 账号已导出');
+                    } catch (e) {
+                        console.error('[account-export]', e);
+                        showToast('❌ 导出失败：' + (e && e.message || e));
+                    }
+                });
+            }
+
+            // ====== 账号导入 ======
+            const profileImportBtn = document.getElementById('profileImportBtn');
+            const profileImportInput = document.getElementById('profileAccountImportInput');
+            if (profileImportBtn && profileImportInput) {
+                profileImportBtn.addEventListener('click', function () { profileImportInput.click(); });
+                profileImportInput.addEventListener('change', function (e) {
+                    const f = e.target.files && e.target.files[0];
+                    profileImportInput.value = '';
+                    if (!f) return;
+                    (async function () {
+                        const ok = await showConfirm({
+                            title: '导入账号',
+                            message: '确定导入此账号备份吗？\n\n• 当前账号数据（聊天记录、好友、表情包、ID、昵称…）将被备份覆盖\n• 操作不可撤销\n\n请确认继续。',
+                            confirmText: '覆盖导入',
+                            danger: true
+                        });
+                        if (!ok) return;
+                        try {
+                            showToast('读取备份文件中…');
+                            const text = await f.text();
+                            const pkg = JSON.parse(text, function (k, v) {
+                                if (typeof v === 'string' && v.startsWith('b64:')) {
+                                    const b64 = v.slice(4);
+                                    const bin = atob(b64);
+                                    const arr = new Uint8Array(bin.length);
+                                    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                                    return arr.buffer;
+                                }
+                                return v;
+                            });
+                            if (!pkg || pkg._app !== 'SuChat' || pkg._kind !== 'account-backup') {
+                                throw new Error('文件不是合法的 SuChat 账号备份');
+                            }
+                            const meta = pkg.meta || {};
+                            // 覆盖主数据
+                            if (meta.sessions) sessions = meta.sessions;
+                            if (Array.isArray(meta.friends)) friends = meta.friends;
+                            if (meta.friendRequests) friendRequests = meta.friendRequests;
+                            if (meta.sentRequests) sentRequests = meta.sentRequests;
+                            if (meta.chatBackgrounds) chatBackgrounds = meta.chatBackgrounds;
+                            if (meta.myName) myName = meta.myName;
+                            if (typeof meta.myAvatar !== 'undefined') myAvatar = meta.myAvatar;
+                            if (meta.myPeerId) myPeerId = meta.myPeerId;
+                            if (Array.isArray(meta.plugins)) { _replaceArrayInPlace(plugins, meta.plugins); }
+
+                            // 表情包
+                            const stickerMetaList = Array.isArray(meta.stickers) ? meta.stickers : [];
+                            stickers = stickerMetaList.map(s => ({
+                                id: s.id, name: s.name, isGif: !!s.isGif, type: s.type, data: null
+                            }));
+                            // 清空并重建贴纸 IDB
+                            try { await idbStickerClearAll(); } catch (e) {}
+                            if (Array.isArray(pkg.stickers)) {
+                                for (const item of pkg.stickers) {
+                                    if (!item || !item.id) continue;
+                                    try {
+                                        if (item.data) {
+                                            await idbStickerPut(item.id, _base64ToBlob(item.data));
+                                        } else if (item.blob) {
+                                            const ab = item.blob;
+                                            const mt = (stickerMetaList.find(s=>s.id===item.id)||{}).type || 'image/png';
+                                            await idbStickerPut(item.id, new Blob([ab], { type: mt }));
+                                        }
+                                    } catch (e) { console.warn('导入贴纸失败:', item.id, e); }
+                                }
+                            }
+                            // 存储
+                            await saveData();
+
+                            // 应用个人主页 UI
+                            if (typeof profileNameInput !== 'undefined') profileNameInput.value = myName;
+                            if (typeof profileIdDisplay !== 'undefined') profileIdDisplay.textContent = myPeerId || _tf('未连接',{source:'profile_status'});
+                            if (typeof profileAvatarImg !== 'undefined') {
+                                if (myAvatar) { profileAvatarImg.src = myAvatar; profileAvatarImg.style.display = ''; }
+                                else { profileAvatarImg.style.display = 'none'; }
+                            }
+                            if (typeof profileAvatarPlaceholder !== 'undefined') {
+                                profileAvatarPlaceholder.style.display = myAvatar ? 'none' : 'flex';
+                                if (!myAvatar) profileAvatarPlaceholder.textContent = (myName||'旅').charAt(0).toUpperCase();
+                            }
+                            try { localStorage.removeItem('suchat_profile_cover'); } catch (e) {}
+                            // 重建主页封面，重启 Peer，刷新全部 UI
+                            try {
+                                if (typeof profileCoverImg !== 'undefined') {
+                                    profileCoverImg.style.display = 'none';
+                                    profileCoverImg.removeAttribute('src');
+                                }
+                                if (typeof profileCoverPlaceholder !== 'undefined') profileCoverPlaceholder.style.display = 'flex';
+                            } catch(e){}
+
+                            try { chatOverlay.classList.remove('active'); } catch(e){}
+                            try { settingsMenu.classList.remove('active'); } catch(e){}
+                            try { searchBar.classList.remove('active'); } catch(e){}
+
+                            currentChatId = null;
+                            setTimeout(() => {
+                                try { initPeer(); } catch(e) {}
+                                try { renderAll(); } catch(e) {}
+                            }, 400);
+                            showToast('✅ 账号导入成功');
+                        } catch (err) {
+                            console.error('[account-import]', err);
+                            showToast('❌ 导入失败：' + (err && err.message || err));
+                        }
+                    })();
+                });
+            }
+
+            // ====== 全屏开关 ======
+            const fullscreenSwitch = document.getElementById('fullscreenSwitch');
+            // 用内存变量 + DOM class 双重作为真实状态源，完全不依赖运行时 localStorage 读取
+            // 原因：HBuilderX / WebView 多上下文 / 跳转远程时，localStorage 可能读到旧值或写入失败
+            let __fsEnabled = true;
+            function isFullscreenEnabled() {
+                // 1. 以 DOM class 为第一优先级（用户看到的滑块状态）
+                if (fullscreenSwitch) return fullscreenSwitch.classList.contains('on');
+                // 2. 退化到内存变量
+                return __fsEnabled;
+            }
+            function setFullscreenEnabled(on) {
+                on = !!on;
+                __fsEnabled = on;
+                if (fullscreenSwitch) fullscreenSwitch.classList.toggle('on', on);
+                // localStorage 只做"下次启动恢复"用；失败不影响运行
+                try { localStorage.setItem('suchat_fullscreen_click', on ? '1' : '0'); } catch (e) {}
+            }
+            // 初始化：从 localStorage 读取偏好（仅用于首次启动）
+            (function initFullscreenPref() {
+                try {
+                    const v = localStorage.getItem('suchat_fullscreen_click');
+                    if (v === '0') { setFullscreenEnabled(false); return; }
+                    // v === '1' 或 空（默认开启）都按开启
+                    setFullscreenEnabled(true);
+                } catch (e) { setFullscreenEnabled(true); }
+            })();
+
+            function isInFullscreen() {
+                return !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+            }
+            function toggleFullscreen() {
+                if (isInFullscreen()) {
+                    const exit = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+                    if (exit) return exit.call(document).catch(()=>{});
+                } else {
+                    const el = document.documentElement;
+                    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+                    if (req) return req.call(el).catch(()=>{});
+                }
+                return Promise.resolve();
+            }
+            // 全屏开关点击冷却：避免用户刚点击开关（例如"关闭全屏"）时，紧接着触发的全局 capture 点击监听器又把它拉回全屏
+            let _fsSwitchCoolOffUntil = 0;
+            if (fullscreenSwitch) {
+                fullscreenSwitch.addEventListener('click', function (e) {
+                    // 阻止冒泡 + 阻止默认：防止全局 capture click 把这个点击当作普通空白点击
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const on = !fullscreenSwitch.classList.contains('on');
+                    setFullscreenEnabled(on);
+                    _fsSwitchCoolOffUntil = Date.now() + 400;
+                    showToast('点击页面全屏：' + (on ? '已开启' : '已关闭'));
+                    // 若用户把开关从开→关 并且当前处于全屏 → 顺手退出
+                    if (!on && isInFullscreen()) { toggleFullscreen().catch(()=>{}); }
+                });
+            }
+            // 单一常驻 capture 监听器：每次点击都实时检查开关的 DOM class
+            (function bindClickFullscreen() {
+                function shouldSkipTarget(target) {
+                    if (!target || target.nodeType !== 1) return false;
+                    // 开关本身 → 绝对跳过
+                    if (fullscreenSwitch && fullscreenSwitch.contains(target)) return true;
+                    // 输入类/按钮/链接类交互控件 → 跳过，避免打断正常操作
+                    const t = target.closest && target.closest('input, textarea, select, button, a, label, option, [contenteditable="true"], [role="dialog"], [role="button"], [role="link"]');
+                    return !!t;
+                }
+                function onDocClick(e) {
+                    if (Date.now() < _fsSwitchCoolOffUntil) return;
+                    if (!isFullscreenEnabled()) return;           // DOM class = 关 → 立即跳过
+                    if (isInFullscreen()) return;
+                    if (shouldSkipTarget(e.target)) return;
+                    toggleFullscreen().catch(()=>{});
+                }
+                document.addEventListener('click', onDocClick, { capture: true, passive: true });
+            })();
+
             // ====== 关于应用弹窗 ======
             const profileAboutBtn = document.getElementById('profileAboutBtn');
             const aboutModal = document.getElementById('aboutModal');
@@ -13189,35 +13568,6 @@
 
             renderAll();
             initPeer();
-
-            // 用户点击页面时进入全屏（Fullscreen API 必须由用户手势触发）
-            // 退出全屏后再次点击可以重新触发：仅在"当前不在全屏"时调用 requestFullscreen
-            (function setupAutoFullscreen() {
-                const isFullscreen = () => {
-                    return !!(document.fullscreenElement
-                        || document.webkitFullscreenElement
-                        || document.mozFullScreenElement
-                        || document.msFullscreenElement);
-                };
-                const enterFullscreen = () => {
-                    // 已在全屏中则不再重复调用（避免无意义的 Promise rejection）
-                    if (isFullscreen()) return;
-                    try {
-                        const el = document.documentElement;
-                        const req = el.requestFullscreen
-                            || el.webkitRequestFullscreen
-                            || el.mozRequestFullScreen
-                            || el.msRequestFullscreen;
-                        if (req) {
-                            const p = req.call(el);
-                            if (p && typeof p.catch === 'function') p.catch(() => {});
-                        }
-                    } catch (e) { /* 静默失败：全屏不是必需功能 */ }
-                };
-                // 常驻监听：每次点击如果不在全屏就重新进入
-                document.addEventListener('click', enterFullscreen);
-                document.addEventListener('touchstart', enterFullscreen, { passive: true });
-            })();
 
             // ================================================================
             // 手机端键盘适配：使用 visualViewport API 让聊天面板跟随键盘升起
