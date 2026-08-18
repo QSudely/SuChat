@@ -168,11 +168,7 @@
         html[data-theme="light"] .request-item .r-info .r-name { color: var(--c-text); }
         html[data-theme="light"] .session-item .s-info .s-last,
         html[data-theme="light"] .request-item .r-info .r-id { color: var(--c-text-muted); }
-        html[data-theme="light"] .session-item .s-tag {
-            color: var(--c-text-muted);
-            background: var(--c-bg-hover);
-            border-color: var(--c-border-soft);
-        }
+        /* （s-tag 亮模式样式已在全局 s-tag 块中与暗模式一起写，避免重复） */
         html[data-theme="light"] .empty-state { color: var(--c-text-faint); }
         html[data-theme="light"] .request-item .r-actions .accept {
             background: var(--c-success);
@@ -643,14 +639,82 @@
             pointer-events: none;
         }
         .session-item .s-tag {
-            font-size: 10px;
-            color: #4a5f7a;
-            background: rgba(255, 255, 255, 0.04);
-            padding: 1px 8px;
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.04);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            padding: 3px 10px 3px 22px;
+            border-radius: 999px;
+            border: 1px solid transparent;
             flex-shrink: 0;
             pointer-events: none;
+            position: relative;
+            line-height: 1.2;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--c-text-muted);
+        }
+        /* 在线/离线状态圆点图标（放在 pill 左侧，相对定位让它在 pill 内可见） */
+        .session-item .s-tag::before {
+            content: '';
+            position: absolute;
+            left: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 0 3px currentColor;
+            opacity: 0.18;
+        }
+        .session-item .s-tag::after {
+            content: '';
+            position: absolute;
+            left: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+        /* 在线：绿色 */
+        .session-item .s-tag[data-online="true"] {
+            color: #14b86a;
+            background: rgba(20, 184, 106, 0.10);
+            border-color: rgba(20, 184, 106, 0.22);
+        }
+        .session-item .s-tag[data-online="true"]::after {
+            box-shadow: 0 0 0 2px rgba(20,184,106,0.18), 0 0 10px rgba(20,184,106,0.6);
+            animation: onlinePulse 2s ease-in-out infinite;
+        }
+        @keyframes onlinePulse {
+            0%, 100% { box-shadow: 0 0 0 2px rgba(20,184,106,0.18), 0 0 6px rgba(20,184,106,0.5); }
+            50%      { box-shadow: 0 0 0 3px rgba(20,184,106,0.28), 0 0 14px rgba(20,184,106,0.75); }
+        }
+        /* 离线：红色 */
+        .session-item .s-tag[data-online="false"] {
+            color: #ef4444;
+            background: rgba(239, 68, 68, 0.09);
+            border-color: rgba(239, 68, 68, 0.22);
+        }
+        .session-item .s-tag[data-online="false"]::after {
+            box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.4);
+        }
+        /* 亮色模式适配 */
+        html[data-theme="light"] .session-item .s-tag {
+            color: var(--c-text-muted);
+            background: var(--c-bg-hover);
+            border-color: var(--c-border-soft);
+        }
+        html[data-theme="light"] .session-item .s-tag[data-online="true"] {
+            color: #0f9f5c;
+            background: rgba(20, 184, 106, 0.10);
+            border-color: rgba(20, 184, 106, 0.28);
+        }
+        html[data-theme="light"] .session-item .s-tag[data-online="false"] {
+            color: #dc2626;
+            background: rgba(239, 68, 68, 0.08);
+            border-color: rgba(239, 68, 68, 0.26);
         }
         .empty-state {
             color: #3d506a;
@@ -8703,7 +8767,7 @@
                                     <div class="s-name">${escapeHtml(displayName)}${pinIcon}</div>
                                     <div class="s-last">${escapeHtml(_tf(lastText.slice(0,30), { source: 'session_lastmsg', sessionId: id }))}</div>
                                 </div>
-                                <div class="s-tag">${tag}</div>
+                                <div class="s-tag" data-online="${s.online ? 'true' : 'false'}">${tag}</div>
                                 ${badge}
                             </div>
                         `;
