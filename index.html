@@ -244,6 +244,37 @@
   }
   a.btn-primary:hover .arrow { transform: translateX(3px); }
 
+  .btn-download {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 24px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink-0);
+    text-decoration: none;
+    border-radius: 999px;
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(8px);
+    transition: background .3s, border-color .3s, transform .15s;
+  }
+  .btn-download svg { width: 17px; height: 17px; flex-shrink: 0; }
+  .btn-download:hover {
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(34,211,238,0.4);
+  }
+  .btn-download:active { transform: scale(0.97); }
+  .btn-download .dl-tag {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(34,211,238,0.15);
+    color: var(--accent-0);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
   .src-link {
     display: inline-flex;
     align-items: center;
@@ -601,6 +632,11 @@
               <path d="M5 12h14"/>
               <path d="M13 5l7 7-7 7"/>
             </svg>
+          </a>
+          <a class="btn-download" href="https://qsudely.github.io/SuChat/H59B0711F__20260818222720.apk" download>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+            <span>下载安卓应用版</span>
+            <span class="dl-tag">APK</span>
           </a>
           <a class="src-link" href="https://github.com/QSudely/SuChat" target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.37.5 0 5.78 0 11.29c0 4.78 3.27 8.84 7.81 10.28.57.1.78-.24.78-.53 0-.26-.01-.95-.02-1.86-3.18.66-3.85-1.47-3.85-1.47-.52-1.27-1.27-1.6-1.27-1.6-1.04-.68.08-.67.08-.67 1.15.08 1.76 1.13 1.76 1.13 1.02 1.68 2.68 1.2 3.34.92.1-.71.4-1.2.73-1.47-2.55-.28-5.24-1.23-5.24-5.46 0-1.21.45-2.2 1.19-2.97-.12-.28-.52-1.41.11-2.94 0 0 .97-.3 3.18 1.13a11.3 11.3 0 0 1 5.8 0c2.2-1.43 3.17-1.13 3.17-1.13.63 1.53.23 2.66.12 2.94.74.77 1.18 1.76 1.18 2.97 0 4.24-2.69 5.18-5.25 5.45.41.34.78 1.02.78 2.05 0 1.48-.01 2.68-.01 3.04 0 .29.21.64.79.53A10.86 10.86 0 0 0 24 11.29C24 5.78 18.63.5 12 .5z"/></svg>
