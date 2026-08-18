@@ -633,7 +633,7 @@
               <path d="M13 5l7 7-7 7"/>
             </svg>
           </a>
-          <a class="btn-download" href="https://qsudely.github.io/SuChat/H59B0711F__20260818222720.apk" download>
+          <a class="btn-download" id="dlApkBtn" href="https://qsudely.github.io/SuChat/H59B0711F__20260818222720.apk" download="SuChat.apk">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
             <span>下载安卓应用版</span>
             <span class="dl-tag">APK</span>
@@ -719,6 +719,65 @@
       requestAnimationFrame(raf);
     }
     raf();
+  })();
+
+  // APK 下载：优先用 fetch + Blob 强制触发下载，失败回退为原生 a[download]
+  (function () {
+    var btn = document.getElementById('dlApkBtn');
+    if (!btn) return;
+    function saveBlob(url, filename) {
+      try {
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () {
+          document.body.removeChild(a);
+          if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+        }, 2000);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+    function showToast(msg) {
+      var t = document.createElement('div');
+      t.textContent = msg;
+      t.style.cssText = 'position:fixed;left:50%;bottom:40px;transform:translateX(-50%);z-index:9999;padding:10px 18px;border-radius:10px;background:rgba(0,0,0,0.82);color:#fff;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,0.3);backdrop-filter:blur(6px);pointer-events:none;';
+      document.body.appendChild(t);
+      setTimeout(function () {
+        t.style.transition = 'opacity .35s';
+        t.style.opacity = '0';
+        setTimeout(function () { t.remove(); }, 400);
+      }, 2600);
+    }
+    btn.addEventListener('click', function (e) {
+      var url = btn.getAttribute('href');
+      var filename = btn.getAttribute('download') || 'SuChat.apk';
+      e.preventDefault();
+      btn.style.opacity = '0.78';
+      btn.style.pointerEvents = 'none';
+      fetch(url, { method: 'GET', mode: 'cors', credentials: 'omit' })
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.blob();
+        })
+        .then(function (blob) {
+          var blobUrl = URL.createObjectURL(blob);
+          saveBlob(blobUrl, filename);
+          showToast('下载已开始 · ' + filename);
+        })
+        .catch(function () {
+          // fetch 失败（CORS 或不存在）：回退为原生 a[download]
+          saveBlob(url, filename);
+        })
+        .finally(function () {
+          btn.style.opacity = '';
+          btn.style.pointerEvents = '';
+        });
+    });
   })();
 </script>
 
