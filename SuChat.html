@@ -10808,15 +10808,13 @@
                 chatOverlay.classList.add('active');
                 applyChatBackground(sessionId);
                 updateQuotePreview();
-                // 分帧：先渲染 + 聚焦，避免手机输入法升起时与渲染/布局竞争同一帧导致卡顿
-                // 第一帧：渲染消息 + 进入动画
+                // 进入聊天面板后**不自动聚焦输入框**，避免手机端：
+                //   - 一打开聊天就立刻升起输入法占屏、造成卡顿感
+                //   - 遮挡气泡列表
+                // 用户需要输入时自己点击输入框即可（引用/编辑/发送完后仍会主动聚焦，不影响体验）
                 requestAnimationFrame(() => {
                     renderChatMessages(sessionId, true);
                     chatMessages.classList.add('animate-in');
-                    // 第二帧：滚动到底后再 focus，避免与输入法竞争同一帧布局计算
-                    requestAnimationFrame(() => {
-                        try { chatInput.focus({ preventScroll: true }); } catch (e) { chatInput.focus(); }
-                    });
                 });
                 // unread=0 不需要立即写盘，防抖 saveData 即可
                 saveData();
@@ -12008,6 +12006,11 @@
                     showToast('已发送请求，等待对方回应');
                     return;
                 }
+                // 【重新加好友】如果本地已有这个 peerId 的历史会话（删除过好友、被对方删过），发送前先把会话从 "非好友" 状态还原
+                // 这样对方一接受 → 历史聊天、置顶、备注等全部直接恢复，不会丢记录
+                if (sessions[targetId] && sessions[targetId]._notFriend) {
+                    _restoreSessionAsFriend(targetId);
+                }
                 if (connections[targetId]) {
                     sendRequestData(targetId);
                     return;
@@ -12036,6 +12039,45 @@
                 }, 8000);
             }
 
+            /**
+             * 【重新加好友 → 合并保留历史数据】
+             * 当之前删过好友 / 被对方删过 / 对方重置过账号 → 再次成为好友时：
+             *   不清空 messages，不清空 unread，不重置 _pinned/_friendAddedAt/chatBackgrounds
+             *   只把会话从"非好友"状态还原成正常好友会话，并按传入的名字/头像做更新
+             * 如果 peerId 还没有 sessions，则按默认值新建一个空会话。
+             */
+            function _restoreSessionAsFriend(peerId, opts) {
+                opts = opts || {};
+                const defaultOnline = connections[peerId] ? connections[peerId].open : false;
+                if (!sessions[peerId]) {
+                    // 全新：初始化默认会话结构
+                    sessions[peerId] = {
+                        type: 'private',
+                        name: opts.name || peerId,
+                        avatar: opts.avatar || null,
+                        messages: [],
+                        unread: 0,
+                        online: defaultOnline
+                    };
+                } else {
+                    // 已存在：保留 messages/unread/pinned/聊天背景/位置等所有数据，
+                    // 仅更新用户可见的姓名/头像/在线状态/清除非好友标记
+                    const s = sessions[peerId];
+                    // 名字头像：只有传入了才更新（避免默认空头像覆盖自定义头像）
+                    if (opts.name) s.name = opts.name;
+                    if (opts.avatar || opts.__forceClearAvatar) s.avatar = opts.avatar || null;
+                    s.online = defaultOnline;
+                    s.type = 'private';
+                    delete s._notFriend;
+                    // messages / unread / _pinned / _lastInfoAt / _friendAddedAt 一律保留
+                    if (!Array.isArray(s.messages)) s.messages = [];
+                    if (typeof s.unread !== 'number') s.unread = 0;
+                }
+                // 无论新建还是恢复，都记录这次恢复时间（用于判断对方发送的 friend_deleted / account_reset 是否已过期）
+                sessions[peerId]._friendAddedAt = Date.now();
+                return sessions[peerId];
+            }
+
             // 排队：accept/reject 回复包（当连接不存在时暂存，等连接建立时立即发送）
             const pendingFriendResponses = {}; // { [peerId]: payload }
 
@@ -12055,22 +12097,8 @@
                 if (action === 'accept') {
                     req.status = 'accepted';
                     if (!friends.includes(from)) friends.push(from);
-                    if (!sessions[from]) {
-                        sessions[from] = {
-                            type: 'private',
-                            name: req.name,
-                            avatar: req.avatar || null,
-                            messages: [],
-                            unread: 0,
-                            online: connections[from] ? true : false
-                        };
-                    } else {
-                        sessions[from].name = req.name;
-                        sessions[from].avatar = req.avatar || null;
-                    }
-                    // 重新成为好友，清除非好友标记
-                    delete sessions[from]._notFriend;
-                    sessions[from]._friendAddedAt = Date.now();
+                    // 【重新加好友 → 直接合并历史会话，不再 messages=[] 清空】
+                    _restoreSessionAsFriend(from, { name: req.name, avatar: req.avatar || null });
                     const acceptPayload = {
                         type: 'friend_request_accept',
                         from: myPeerId,
@@ -12112,22 +12140,8 @@
             function onFriendRequestAccept(data, from) {
                 if (sentRequests[from]) sentRequests[from].status = 'accepted';
                 if (!friends.includes(from)) friends.push(from);
-                if (!sessions[from]) {
-                    sessions[from] = {
-                        type: 'private',
-                        name: data.name || from,
-                        avatar: data.avatar || null,
-                        messages: [],
-                        unread: 0,
-                        online: connections[from] ? true : false
-                    };
-                } else {
-                    sessions[from].name = data.name || from;
-                    sessions[from].avatar = data.avatar || null;
-                }
-                // 重新成为好友，清除非好友标记
-                delete sessions[from]._notFriend;
-                sessions[from]._friendAddedAt = Date.now();
+                // 【重新加好友 → 直接合并历史会话】
+                _restoreSessionAsFriend(from, { name: data.name || from, avatar: data.avatar || null });
                 saveData();
                 renderAll();
                 showToast(`✅ ${data.name || from} 接受了你的好友请求`);
@@ -12319,18 +12333,11 @@
                     // 竞态修复：如果我曾主动发好友请求给对方，对方现在回消息 → 视为对方已接受
                     if (!friends.includes(from) && hasPendingOut) {
                         if (!friends.includes(from)) friends.push(from);
-                        if (!sessions[from]) {
-                            sessions[from] = {
-                                type: 'private',
-                                name: data.name || (window.userMap && window.userMap[from] && window.userMap[from].name) || from,
-                                avatar: (window.userMap && window.userMap[from] && window.userMap[from].avatar) || null,
-                                messages: [],
-                                unread: 0,
-                                online: connections[from] ? connections[from].open : false
-                            };
-                        }
-                        delete sessions[from]._notFriend;
-                        sessions[from]._friendAddedAt = Date.now();
+                        // 【重新加好友 → 合并保留历史会话】
+                        _restoreSessionAsFriend(from, {
+                            name: data.name || (window.userMap && window.userMap[from] && window.userMap[from].name) || from,
+                            avatar: (window.userMap && window.userMap[from] && window.userMap[from].avatar) || null
+                        });
                         if (sentRequests[from]) sentRequests[from].status = 'accepted';
                         saveData();
                         renderAll();
@@ -12339,18 +12346,11 @@
                     if (!friends.includes(from) && hasPendingIn) {
                         // 自动按接受处理
                         if (!friends.includes(from)) friends.push(from);
-                        if (!sessions[from]) {
-                            sessions[from] = {
-                                type: 'private',
-                                name: data.name || (friendRequests[from] && friendRequests[from].name) || from,
-                                avatar: (friendRequests[from] && friendRequests[from].avatar) || null,
-                                messages: [],
-                                unread: 0,
-                                online: connections[from] ? connections[from].open : false
-                            };
-                        }
-                        delete sessions[from]._notFriend;
-                        sessions[from]._friendAddedAt = Date.now();
+                        // 【重新加好友 → 合并保留历史会话】
+                        _restoreSessionAsFriend(from, {
+                            name: data.name || (friendRequests[from] && friendRequests[from].name) || from,
+                            avatar: (friendRequests[from] && friendRequests[from].avatar) || null
+                        });
                         if (friendRequests[from]) friendRequests[from].status = 'accepted';
                         // 回复一个 accept 让对方同步好友状态
                         _enqueueOrSendFriendResponse(from, {
@@ -12374,15 +12374,11 @@
                         let shouldUpdateNameAvatar = false;
                         if (friends.includes(from)) {
                             if (!sessions[from]) {
-                                // 有好友关系但还没 session：初始化
-                                sessions[from] = {
-                                    type: 'private',
+                                // 有好友关系但还没 session：用合并/恢复逻辑初始化（防止覆盖已有 messages）
+                                _restoreSessionAsFriend(from, {
                                     name: data.name || from,
-                                    avatar: data.avatar || null,
-                                    messages: [],
-                                    unread: 0,
-                                    online: true
-                                };
+                                    avatar: data.avatar || null
+                                });
                                 shouldUpdateNameAvatar = true;
                             } else {
                                 const last = sessions[from]._lastInfoAt || 0;
@@ -12452,14 +12448,12 @@
                     case 'name_change':
                         // 处理对方的头像/名称变更通知（带时间戳防止旧包覆盖）
                         if (!sessions[from]) {
-                            sessions[from] = {
-                                type: 'private',
+                            // 理论上不会发生（没 session 说明没见过此人，变更通知不该出现），
+                            // 但兜底时也走合并逻辑而不是 messages=[]，防止任何竞态下丢失缓存记录
+                            _restoreSessionAsFriend(from, {
                                 name: (data.name || data.newName || from),
-                                avatar: data.avatar || null,
-                                messages: [],
-                                unread: 0,
-                                online: connections[from] ? connections[from].open : false
-                            };
+                                avatar: data.avatar || null
+                            });
                         }
                         const chgAt = data.infoAt || 0;
                         const lastAt = sessions[from]._lastInfoAt || 0;
