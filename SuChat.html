@@ -5916,9 +5916,10 @@
 
         <!-- ===== 底部导航 ===== -->
         <div class="bottom-nav">
-            <button class="nav-item active" data-page="pageSessions">
+            <button class="nav-item active" data-page="pageSessions" id="navSessions">
                 <span class="icon">💬</span>
                 <span class="label">会话</span>
+                <span class="badge" id="sessionBadge" style="display:none;">0</span>
             </button>
             <button class="nav-item" data-page="pageRequests" id="navRequests">
                 <span class="icon">📩</span>
@@ -6115,6 +6116,7 @@
             const sessionList = document.getElementById('sessionList');
             const requestList = document.getElementById('requestList');
             const requestBadge = document.getElementById('requestBadge');
+            const sessionBadge = document.getElementById('sessionBadge');
 
             const homeName = document.getElementById('homeName');
             const homeId = document.getElementById('homeId');
@@ -6809,6 +6811,7 @@
                             deletedCount++;
                         }
                         saveData();
+                        updateSessionBadge();
                     } else if (tab === 'stickers') {
                         // 删表情包：从 stickers 数组移除 + 清 IDB stickers store + 清文件数据（如果作为消息发送过）
                         const ids = sel.map(k => k.slice(8)); // 去掉 sticker:
@@ -8231,6 +8234,7 @@
                 secureSend(sid, msgData);
                 saveData();
                 renderSessions();
+                updateSessionBadge();
                 renderChatMessages(sid, true);
             }
 
@@ -8897,6 +8901,7 @@
                         openChat(id);
                     });
                 });
+                updateSessionBadge();
             }
 
             function renderRequests() {
@@ -8968,9 +8973,23 @@
                 }
                 if (count > 0) {
                     requestBadge.style.display = 'flex';
-                    requestBadge.textContent = count;
+                    requestBadge.textContent = count > 99 ? '99+' : count;
                 } else {
                     requestBadge.style.display = 'none';
+                }
+            }
+
+            function updateSessionBadge() {
+                let total = 0;
+                for (let k in sessions) {
+                    const u = sessions[k].unread || 0;
+                    if (u > 0) total += u;
+                }
+                if (total > 0) {
+                    sessionBadge.style.display = 'flex';
+                    sessionBadge.textContent = total > 99 ? '99+' : total;
+                } else {
+                    sessionBadge.style.display = 'none';
                 }
             }
 
@@ -8980,6 +8999,7 @@
                 renderRequests();
                 renderProfile();
                 updateRequestBadge();
+                updateSessionBadge();
                 if (currentChatId) renderChatMessages(currentChatId);
             }
 
@@ -10943,6 +10963,7 @@
 
                 // 【P1】saveData 改到浏览器空闲时再写盘（s.unread=0 这种小变更，不需要立即持久化）
                 // 避免手机上 localStorage 写几十/几百 KB 时在关键帧阻塞主线程
+                updateSessionBadge();
                 if ('requestIdleCallback' in window) {
                     requestIdleCallback(() => saveData(), { timeout: 1000 });
                 } else {
@@ -12920,11 +12941,13 @@
                             // 不在当前聊天：只更新列表（不需要 renderAll + renderChatMessages）
                             renderSessions();
                             updateRequestBadge();
+                            updateSessionBadge();
                         } else {
                             s.unread = 0;
                             // 在当前聊天：只重渲染消息（已在底部会自动滚动）
                             renderChatMessages(targetId);
                             renderSessions(); // 更新最后一条消息预览
+                            updateSessionBadge();
                         }
                         saveData();
                         break;
