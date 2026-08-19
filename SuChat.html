@@ -2519,15 +2519,27 @@
             border-radius: 14px;
             background: rgba(255, 255, 255, 0.06);
             border: 1px solid rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
+            /* backdrop-filter 在手机端（GPU 合成层+每帧模糊）开销很大，
+               进入聊天面板时几百条同时创建合成层会造成明显卡顿 → 默认只在桌面端启用。
+               检测通过 JS 给 html 加 .is-touchscreen，在移动端关闭 blur。 */
             max-width: min(92%, 520px);
             align-self: flex-start;
             cursor: pointer;
-            transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), background 0.15s;
+            /* 只留 background hover 过渡，去掉 transform：
+               进入面板时大量 transform 元素同时启动动画 → 手机端合成层创建卡 */
+            transition: background 0.15s ease-out;
             position: relative;
             touch-action: pan-y;
             overflow: visible;
+            will-change: opacity;
+        }
+        @supports not ((-webkit-touch-callout: none) and (pointer: coarse)) {
+            /* 桌面端（带精确指针 + 不支持 touch-callout）：启用 backdrop-filter + 完整交互 */
+            .msg {
+                -webkit-backdrop-filter: blur(12px);
+                backdrop-filter: blur(12px);
+                transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), background 0.15s ease-out;
+            }
         }
         .msg.dragging {
             transition: none;
@@ -2934,11 +2946,31 @@
             }
         }
         /* 仅在进入聊天面板时才触发消息进入动画，避免在线/离线、文件传输等刷新导致闪烁 */
-        .chat-messages.animate-in .msg {
-            animation: fadeUp 0.25s ease;
+        /* 【进入面板性能】原先对每条 .msg 各自跑 fadeUp 动画，几百条消息时 = 几百个 keyframes +
+           几百次 transform 重绘，移动端 GPU 纹理上传压力很大。改成：只给整个 chat-messages 容器做淡入，
+           这样整段动画只是 1 层 opacity，内部 msg 不用再动。 */
+        @keyframes chatFadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
-
-        /* ===== 消息操作菜单 ===== */
+        .chat-messages.animate-in {
+            animation: chatFadeIn 220ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+        }
+        /* 旧的 msg 级动画留个空壳兼容，不再实际使用 */
+        .chat-messages.animate-in .msg {
+            animation: none;
+        }
+        @keyframes fadeUp {
+            from { opacity: 1; }
+            to   { opacity: 1; }
+        }
+        .msg-sys {
+            text-align: center;
+            font-size: 11px;
+            color: #4a5f7a;
+            padding: 4px 0;
+            opacity: 0.7;
+        }
         .msg-menu {
             position: fixed;
             background: #1a212e;
@@ -8099,7 +8131,7 @@
                 if (!sid || !text) return;
                 const s = sessions[sid];
                 if (!s) return;
-                if (!friends.includes(sid) || s._notFriend) { showToast('你跟对方还不是好友'); return; }
+                if (!_tryAutoRestoreFriendship(sid)) { showToast('你跟对方还不是好友'); return; }
                 if (!s.online) { showToast('对方不在线，无法发送消息'); return; }
                 const msgTime = Date.now();
                 let msgData = { type: 'text', peerId: myPeerId, text: text, time: msgTime, name: myName };
@@ -9900,7 +9932,7 @@
                 if (!currentChatId) { showToast('请先进入聊天'); return; }
                 const s = sessions[currentChatId];
                 if (!s) return;
-                if (!friends.includes(currentChatId) || s._notFriend) {
+                if (!_tryAutoRestoreFriendship(currentChatId)) {
                     showToast('你跟对方还不是好友，请添加Ta为好友');
                     return;
                 }
@@ -10416,7 +10448,7 @@
                 if (!currentChatId) { showToast('请先进入聊天'); return; }
                 const s = sessions[currentChatId];
                 if (!s) return;
-                if (!friends.includes(currentChatId) || s._notFriend) {
+                if (!_tryAutoRestoreFriendship(currentChatId)) {
                     showToast('你跟对方还不是好友，请添加Ta为好友'); return;
                 }
                 if (!s.online) { showToast('对方不在线，无法发送'); return; }
@@ -10801,23 +10833,35 @@
                 chatMessages.querySelectorAll('.msg.highlight').forEach(el => el.classList.remove('highlight'));
                 closeExtendPanel();
                 hideMsgMenu();
-                // 显式隐藏底部导航，避免手机输入法回弹瞬间露出（CSS :has 兜底 + JS 双保险）
+                // 显式隐藏底部导航（JS 直接写 style，避免 body:has() 全文档样式重算）
                 const _bn = document.querySelector('.bottom-nav');
                 if (_bn) _bn.style.display = 'none';
-                // 进入面板：先加 active class（触发显示）
+
+                // ============== 进入面板性能优化 ==============
+                // 【P0】拆开同步做的"显示 + 渲染 + 背景 + save"，避免同一帧挤 layout thrashing
+                // Step 1: 先只切 display/flex（轻操作，这一帧只让浏览器先把 overlay 放出来）
                 chatOverlay.classList.add('active');
-                applyChatBackground(sessionId);
-                updateQuotePreview();
-                // 进入聊天面板后**不自动聚焦输入框**，避免手机端：
-                //   - 一打开聊天就立刻升起输入法占屏、造成卡顿感
-                //   - 遮挡气泡列表
-                // 用户需要输入时自己点击输入框即可（引用/编辑/发送完后仍会主动聚焦，不影响体验）
+
+                // Step 2: 下一帧再渲染消息（避免和 overlay 首次 layout + backdrop-filter 合成层创建争用）
+                // （进入聊天不再自动聚焦输入框，手机端不再强制升输入法，键盘布局自然也不抖）
                 requestAnimationFrame(() => {
                     renderChatMessages(sessionId, true);
-                    chatMessages.classList.add('animate-in');
+                    // Step 3: 再下一帧再应用背景（backgroundImage decode + 背景图重绘最耗时，往后推）
+                    requestAnimationFrame(() => {
+                        applyChatBackground(sessionId);
+                        updateQuotePreview();
+                        // 进入动画延迟到最后：此时布局已稳定，每条 msg 的 fadeUp 不会造成抖动
+                        chatMessages.classList.add('animate-in');
+                    });
                 });
-                // unread=0 不需要立即写盘，防抖 saveData 即可
-                saveData();
+
+                // 【P1】saveData 改到浏览器空闲时再写盘（s.unread=0 这种小变更，不需要立即持久化）
+                // 避免手机上 localStorage 写几十/几百 KB 时在关键帧阻塞主线程
+                if ('requestIdleCallback' in window) {
+                    requestIdleCallback(() => saveData(), { timeout: 1000 });
+                } else {
+                    setTimeout(() => saveData(), 120);
+                }
             }
 
             // 应用 / 清除聊天背景（按会话维度）
@@ -11444,7 +11488,7 @@
                         const peerName = getSessionDisplayName(currentChatId);
                         const okDel = await showConfirm({
                             title: '删除联系人',
-                            message: `确定要删除「${peerName}」吗？\n\n• 删除后你的会话列表将不再有此人\n• 对方将无法给你发送消息\n• 对方需重新添加你为好友才能聊天\n\n此操作不可撤销！`,
+                            message: `确定要删除「${peerName}」吗？\n\n• 删除后对方将无法给你发消息\n• 对方需重新添加你为好友才能聊天\n• 本地聊天记录将被保留，下次加回好友时自动恢复\n\n此操作不可撤销！`,
                             confirmText: '删除',
                             danger: true
                         });
@@ -11458,8 +11502,16 @@
                             // 清理对应的 fileData（批量删该会话所有文件，比逐条删快）
                             const delSid = currentChatId;
                             clearFileDataBySession(delSid);
-                            // 删除会话
-                            delete sessions[delSid];
+                            // 【软删除】不再 delete sessions[delSid]！
+                            //   保留 messages / unread / _pinned 等所有数据，只打 _notFriend 标记。
+                            //   下次对方重新加好友回来时 _restoreSessionAsFriend 能把记录恢复。
+                            //   同时把 online=false，避免会话列表里显示"在线"
+                            _ensureSessionSoft(delSid, { setNotFriend: true, online: false });
+                            if (sessions[delSid]) {
+                                sessions[delSid].online = false;
+                                // 清理聊天背景，但不移除 messages 里的占位（保留内存引用即可）
+                                if (chatBackgrounds[delSid]) delete chatBackgrounds[delSid];
+                            }
                             // 关闭连接
                             if (connections[currentChatId]) {
                                 try { connections[currentChatId].close(); } catch (e) {}
@@ -11467,7 +11519,6 @@
                             }
                             // 清理已发送请求记录
                             delete sentRequests[currentChatId];
-                            delete chatBackgrounds[delSid];
                             saveData();
                             // 关闭聊天面板
                             chatOverlay.classList.remove('active');
@@ -11890,8 +11941,9 @@
                 if (!text || !currentChatId) return;
                 const s = sessions[currentChatId];
                 if (!s) return;
-                // 好友关系检查：被对方删除或对方重置账号后不允许发送
-                if (!friends.includes(currentChatId) || s._notFriend) {
+                // 好友关系检查：先尝试静默恢复"曾经是好友"的关系（账号导入新环境竞态时用）
+                const canSend = _tryAutoRestoreFriendship(currentChatId);
+                if (!canSend) {
                     showToast('你跟对方还不是好友，请添加Ta为好友');
                     return;
                 }
@@ -12040,17 +12092,25 @@
             }
 
             /**
-             * 【重新加好友 → 合并保留历史数据】
-             * 当之前删过好友 / 被对方删过 / 对方重置过账号 → 再次成为好友时：
-             *   不清空 messages，不清空 unread，不重置 _pinned/_friendAddedAt/chatBackgrounds
-             *   只把会话从"非好友"状态还原成正常好友会话，并按传入的名字/头像做更新
-             * 如果 peerId 还没有 sessions，则按默认值新建一个空会话。
+             * 【软初始化会话】——永远不要覆盖已有数据！
+             * 所有"找不到 sessions[from] 就新建一个 messages=[]"的老代码都要改调用这个函数。
+             * 规则：
+             *   - 如果会话不存在 → 正常新建
+             *   - 如果会话已存在 → 绝对不碰 messages / unread / _pinned / _lastInfoAt / chatBackgrounds
+             *     只按传入 opts 更新姓名、头像、在线状态、清除 _notFriend 标记、设置 type=private
+             *     （如果 opts 里 name/avatar 没传就保持原会话里的值，不做覆盖）
+             *   - options.setNotFriend=true：如果希望标记"非好友但保留记录"，传入此参数
+             *   - options.overwriteAvatar=true：强制用传入的 opts.avatar 覆盖（仅来自对方 account_reset 之后
+             *     重新发 hello 时需要，因为对方可能自己改了头像）
+             * 这样就不会出现：
+             *   1) 删除好友后重加 → 之前 1000 条还在
+             *   2) 对方导出账号后在新设备重新登录/导入 → 两端 hello 握手阶段不会因为
+             *      "非好友分支初始化"把本地已有的 1000 条 messages 覆盖没
              */
-            function _restoreSessionAsFriend(peerId, opts) {
+            function _ensureSessionSoft(peerId, opts) {
                 opts = opts || {};
-                const defaultOnline = connections[peerId] ? connections[peerId].open : false;
+                const defaultOnline = (connections[peerId] && connections[peerId].open) ? true : false;
                 if (!sessions[peerId]) {
-                    // 全新：初始化默认会话结构
                     sessions[peerId] = {
                         type: 'private',
                         name: opts.name || peerId,
@@ -12060,26 +12120,67 @@
                         online: defaultOnline
                     };
                 } else {
-                    // 已存在：保留 messages/unread/pinned/聊天背景/位置等所有数据，
-                    // 仅更新用户可见的姓名/头像/在线状态/清除非好友标记
                     const s = sessions[peerId];
-                    // 名字头像：只有传入了才更新（避免默认空头像覆盖自定义头像）
+                    // 只有显式传了才更新，避免默认空值盖掉自定义
                     if (opts.name) s.name = opts.name;
-                    if (opts.avatar || opts.__forceClearAvatar) s.avatar = opts.avatar || null;
-                    s.online = defaultOnline;
+                    if (opts.avatar || opts.overwriteAvatar) s.avatar = opts.avatar || null;
+                    if (typeof opts.online === 'boolean') s.online = opts.online;
+                    else s.online = defaultOnline;
                     s.type = 'private';
-                    delete s._notFriend;
-                    // messages / unread / _pinned / _lastInfoAt / _friendAddedAt 一律保留
+                    if (opts.setNotFriend) {
+                        s._notFriend = true;
+                        delete s._friendAddedAt;
+                    } else {
+                        delete s._notFriend;
+                    }
                     if (!Array.isArray(s.messages)) s.messages = [];
                     if (typeof s.unread !== 'number') s.unread = 0;
                 }
-                // 无论新建还是恢复，都记录这次恢复时间（用于判断对方发送的 friend_deleted / account_reset 是否已过期）
-                sessions[peerId]._friendAddedAt = Date.now();
+                if (!opts.setNotFriend) {
+                    sessions[peerId]._friendAddedAt = Date.now();
+                }
                 return sessions[peerId];
             }
 
-            // 排队：accept/reject 回复包（当连接不存在时暂存，等连接建立时立即发送）
-            const pendingFriendResponses = {}; // { [peerId]: payload }
+            /**
+             * 【重新加好友 → 合并保留历史数据】
+             * 当之前删过好友 / 被对方删过 / 对方重置过账号 → 再次成为好友时：
+             *   不清空 messages，不清空 unread，不重置 _pinned/_friendAddedAt/chatBackgrounds
+             *   只把会话从"非好友"状态还原成正常好友会话，并按传入的名字/头像做更新
+             * 如果 peerId 还没有 sessions，则按默认值新建一个空会话。
+             */
+            function _restoreSessionAsFriend(peerId, opts) {
+                // _ensureSessionSoft 已经是"保留旧数据"语义，这里只是一层别名方便调用
+                return _ensureSessionSoft(peerId, opts);
+            }
+
+            /**
+             * 发送前的"静默好友恢复"。
+             * 触发时机：用户主动发消息（文字 / 文件 / 贴纸 / 语音）前，检查好友关系时 !friends/_notFriend
+             * 修复场景：A 与 B 本来是好友，B 把账号备份导出后在新环境导入 → B 本地 friends 还对 A 是好友，
+             * 但 A 没收到 B 新端的正式 friend_request_accept（因为老环境双方都已经是好友了，不会重走那流程）
+             * 所以 A 这边 friends 可能因为各种竞态原因不含 B 或 sessions._notFriend=true。
+             * 修复判断：只要 sessions[sid].messages.length > 0（本地有历史聊天）→ 视为"曾经是好友，现在静默续上"。
+             *   1) 若 !friends.push(sid)
+             *   2) delete sessions[sid]._notFriend
+             *   3) 更新 _friendAddedAt 保证后续过期 friend_deleted 包不误删
+             * 返回 true 表示现在能当好友对待（要么原本就是，要么自动续上了）
+             * 返回 false 表示确实就是陌生人（没历史聊天记录），需要用户主动去加好友。
+             */
+            function _tryAutoRestoreFriendship(sid) {
+                if (!sessions[sid]) return false;
+                const isFriendNow = friends.includes(sid) && !sessions[sid]._notFriend;
+                if (isFriendNow) return true;
+                const hasHistory = Array.isArray(sessions[sid].messages) && sessions[sid].messages.length > 0;
+                if (!hasHistory) return false;
+                if (!friends.includes(sid)) friends.push(sid);
+                delete sessions[sid]._notFriend;
+                sessions[sid]._friendAddedAt = Date.now();
+                if (!sessions[sid].online) {
+                    sessions[sid].online = connections[sid] ? connections[sid].open : false;
+                }
+                return true;
+            }
 
             function _enqueueOrSendFriendResponse(pid, payload) {
                 if (connections[pid]) {
@@ -12396,22 +12497,17 @@
                                 sessions[from]._lastInfoAt = incomingInfoAt;
                             }
                         } else {
-                            // 还不是好友：也存下来，等成为好友时直接用最新的
-                            if (!sessions[from]) {
-                                sessions[from] = {
-                                    type: 'private',
-                                    name: data.name || from,
-                                    avatar: data.avatar || null,
-                                    messages: [],
-                                    unread: 0,
-                                    online: connections[from] ? connections[from].open : false
-                                };
-                            }
+                            // 还不是好友：也把名字头像存下来，等成为好友时直接用最新的
+                            // 【重点】如果 sessions[from] 已经存在 → 绝对不能 messages=[] 覆盖！
+                            // 常见场景：对方在自己旧端有备份导入新端后，还是原来的 peerId；
+                            // 但 !friends（对方没把我重新拉回好友 / 旧 friend_deleted 通知比当前握手后到达）
+                            // 这时候本地的 sessions[from].messages 还保存着完整聊天历史，必须保留。
+                            _ensureSessionSoft(from, {
+                                name: data.name || from,
+                                avatar: data.avatar || null,
+                                setNotFriend: true
+                            });
                             if (incomingInfoAt > 0) sessions[from]._lastInfoAt = incomingInfoAt;
-                            sessions[from].name = data.name || from;
-                            if (data.avatar || !sessions[from].avatar) {
-                                sessions[from].avatar = data.avatar || null;
-                            }
                         }
                         // 交换主页背景：对方 user_info 携带了 cover，直接写入缓存并应用
                         if (typeof data.cover !== 'undefined') {
@@ -12515,16 +12611,14 @@
                         // ---- 接收端：新的分片文件传输开始 ----
                         const tid = data.transferId;
                         if (!tid) return;
-                        if (!sessions[from]) {
-                            sessions[from] = {
-                                type: 'private',
-                                name: getUserDisplayName(from),
-                                avatar: getUserAvatar(from),
-                                messages: [],
-                                unread: 0,
-                                online: true
-                            };
-                        }
+                        // 【不能覆盖】如果 sessions[from] 已存在但 !friends（账号导入新环境重连竞态），
+                        // 软初始化保留 messages，不然文件消息追加到刚新建的空数组，旧的 1000 条就失联了
+                        _ensureSessionSoft(from, {
+                            name: data.name || getUserDisplayName(from),
+                            avatar: getUserAvatar(from),
+                            online: true,
+                            setNotFriend: !friends.includes(from) ? true : undefined
+                        });
                         const sr = sessions[from];
                         if (!sr.messages) sr.messages = [];
                         const msgTime2 = data.time || Date.now();
@@ -12673,20 +12767,42 @@
 
                     case 'message':
                         const targetId = from;
-                        if (!sessions[targetId]) {
-                            sessions[targetId] = {
-                                type: 'private',
-                                name: from.slice(0, 8),
-                                avatar: null,
-                                messages: [],
-                                unread: 0,
-                                online: true
-                            };
-                            sessions[targetId].name = getUserDisplayName(from);
-                            sessions[targetId].avatar = getUserAvatar(from);
-                        }
+                        // 【绝不覆盖】软初始化：如果 sessions 已存在（账号导入新环境/账号重置后重连），
+                        // 则保留旧的 messages/unread/_pinned/_lastInfoAt 等全部字段
+                        _ensureSessionSoft(targetId, {
+                            name: data.name || getUserDisplayName(from),
+                            avatar: getUserAvatar(from),
+                            online: true,
+                            setNotFriend: !friends.includes(from) ? true : undefined
+                        });
                         const s = sessions[targetId];
                         if (!s.messages) s.messages = [];
+
+                        // 【账号导入新环境自动补录好友】
+                        // 场景：A 与 B 本来是好友，都有 1000 条历史。B 导出账号备份 → 导入新设备。
+                        // 因为是新设备，加密队列/好友关系虽然备份里有，但 B 给 A 发的第一条握手/消息
+                        // 到达时 A 判断 !friends.includes(B) 会拒收（not_friends_rejection）。
+                        // 修复：如果 !friends，但本地 sessions[B].messages.length > 0（有历史聊天），
+                        // 且现在 B 已经能正确加密消息过来（说明 B 把我当好友），我本地自动把 B 拉回好友
+                        if (!friends.includes(from) && !s._notFriend_autoAccept) {
+                            const hasLocalHistory = Array.isArray(s.messages) && s.messages.length > 0;
+                            const cameAsFriend = data && (
+                                typeof data.name !== 'undefined' ||
+                                data.quote ||
+                                data.time
+                            );
+                            if (hasLocalHistory && cameAsFriend) {
+                                if (!friends.includes(from)) friends.push(from);
+                                // 清除非好友标记，保持现有 messages 不变
+                                delete s._notFriend;
+                                s._friendAddedAt = Date.now();
+                                s._notFriend_autoAccept = true;
+                            }
+                        }
+                        // 非好友自动补录的情况下也要允许消息进入，不再拒收（避免双方同时
+                        // 发 not_friends_rejection 导致各自认为"对方不是好友"而僵住）
+                        delete s._notFriend_autoAccept;
+
                         let msgObj = {
                             text: data.text || '',
                             time: data.time,
@@ -13639,11 +13755,18 @@
                 if (!vv) return; // 不支持 visualViewport 的浏览器降级为默认行为
                 // 优化：提前告知 GPU 要动画这个元素的高度，避免输入法升降时卡顿
                 overlay.style.willChange = 'height, top';
+                overlay.style.contain = 'layout paint';   // 额外：让 overlay 的 layout/paint 隔离，不影响外层
 
                 let _kbRaf = 0;
                 let _lastSize = { h: -1, t: -1 };
+                // 【P0 进入面板卡顿修复】面板刚打开（class 从无→active）的前 450ms 是合成层创建热点，
+                // 键盘布局 adapt 先 hold 住，避免同一帧读写 top/height/scrollTop 造成 layout thrashing
+                let _panelOpenGraceUntil = 0;
+
                 function applyLayout() {
                     _kbRaf = 0;
+                    // 宽限窗口内：先跳过，等下次事件自然触发（不会漏掉，因为 resize/scroll 会连续发）
+                    if (Date.now() < _panelOpenGraceUntil) return;
                     // 仅在聊天面板打开时才调整布局，避免影响其他页面
                     if (!overlay.classList.contains('active')) {
                         overlay.style.height = '';
@@ -13661,10 +13784,10 @@
                     overlay.style.top = offsetTop + 'px';
                     overlay.style.height = vh + 'px';
                     overlay.style.bottom = 'auto';
-                    // 输入框聚焦时确保可见：滚到底部
+                    // 只有在 chatInput 已经是 activeElement 时才贴底滚动
+                    // （进入面板时不再自动聚焦，所以这里大概率不再触发，避免无意义的 scrollTop 写回）
                     const active = document.activeElement;
                     if (active && active.id === 'chatInput') {
-                        // next frame 再滚，避免与键盘弹出在同一帧触发 layout thrashing
                         requestAnimationFrame(() => {
                             const cm = document.getElementById('chatMessages');
                             if (cm) cm.scrollTop = cm.scrollHeight;
@@ -13679,8 +13802,13 @@
                 vv.addEventListener('scroll', scheduleApply, { passive: true });
                 // 用 MutationObserver 监听 active class 变化更可靠
                 const mo = new MutationObserver(() => {
-                    // 聊天面板开关时强制重置，避免 _lastSize 缓存导致尺寸未应用
+                    const becameActive = overlay.classList.contains('active');
                     _lastSize = { h: -1, t: -1 };
+                    if (becameActive) {
+                        // 面板刚打开：进入 450ms 宽限窗口，跳过键盘布局计算
+                        // （首次显示没有输入法弹出，不需要立即做 top/height 写入）
+                        _panelOpenGraceUntil = Date.now() + 450;
+                    }
                     scheduleApply();
                 });
                 mo.observe(overlay, { attributes: true, attributeFilter: ['class'] });
