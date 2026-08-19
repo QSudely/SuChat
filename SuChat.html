@@ -550,8 +550,86 @@
         .session-list {
             flex: 1;
             overflow-y: auto;
+            overflow-x: hidden;
             padding: 10px 16px;
+            position: relative;
+            touch-action: pan-y;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
         }
+
+        /* ===== 下拉刷新指示器（fixed 全局层，彻底脱离父容器 overflow 裁剪） ===== */
+        #pullRefresh {
+            position: fixed;
+            left: 0; right: 0;
+            top: 0;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-end;
+            padding-bottom: 0;
+            color: #9fb3d4;
+            font-size: 12px;
+            letter-spacing: 0.3px;
+            box-sizing: border-box;
+            z-index: 99999;
+            /* 初始隐藏：用 translateY 把胶囊推到屏幕上方，完全不可见；同时 opacity: 0 */
+            opacity: 0;
+            transform: translate3d(0, -80px, 0);
+            transition: opacity 220ms ease, transform 260ms cubic-bezier(.2,.7,.2,1);
+            /* 关键：不裁剪任何溢出（fixed 层本身无 overflow 限制） */
+            overflow: visible;
+            -webkit-transform: translate3d(0, -80px, 0);
+            -webkit-transition: opacity 220ms ease, -webkit-transform 260ms cubic-bezier(.2,.7,.2,1);
+        }
+        #pullRefresh.pr-show {
+            opacity: 1 !important;
+        }
+        #pullRefresh.pr-pulling {
+            transition: none !important;
+            -webkit-transition: none !important;
+        }
+        #pullRefresh .pr-inner {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(90, 111, 255, 0.18) !important;
+            border: 1px solid rgba(120, 140, 220, 0.45) !important;
+            padding: 8px 18px;
+            border-radius: 999px;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+            min-width: 160px;
+            justify-content: center;
+            color: #aab9d0;
+        }
+        #pullRefresh .pr-spinner {
+            width: 18px; height: 18px;
+            border-radius: 50%;
+            border: 2.5px solid rgba(140, 160, 190, 0.5);
+            border-top-color: #74c6fc;
+            flex-shrink: 0;
+            display: inline-block;
+        }
+        #pullRefresh .pr-text {
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        #pullRefresh[data-state="ready"] .pr-spinner     { transform: rotate(0deg);    animation: none; border-top-color: #8a9fb8; }
+        #pullRefresh[data-state="threshold"] .pr-inner   { color: #74c6fc !important; border-color: rgba(116, 198, 252, 0.6) !important; background: rgba(116, 198, 252, 0.22) !important; }
+        #pullRefresh[data-state="threshold"] .pr-spinner { border-top-color: #74c6fc; transform: rotate(180deg); }
+        #pullRefresh[data-state="refreshing"] .pr-spinner{ animation: prSpin 0.75s linear infinite; border-top-color: #5a6fff; }
+        #pullRefresh[data-state="refreshing"] .pr-inner  { color: #9cb3ff !important; border-color: rgba(90, 111, 255, 0.55) !important; background: rgba(90, 111, 255, 0.22) !important; }
+        @keyframes prSpin { to { transform: rotate(360deg); } }
+
+        html[data-theme="light"] #pullRefresh { color: #4b5a74; }
+        html[data-theme="light"] #pullRefresh .pr-inner { background: rgba(37,99,235,0.12) !important; border-color: rgba(37,99,235,0.35) !important; color: #4b5563; }
+        html[data-theme="light"] #pullRefresh[data-state="threshold"] .pr-inner { color: #2563eb !important; background: rgba(37,99,235,0.18) !important; border-color: rgba(37,99,235,0.48) !important; }
+        html[data-theme="light"] #pullRefresh[data-state="threshold"] .pr-spinner { border-top-color: #2563eb; }
+        html[data-theme="light"] #pullRefresh[data-state="refreshing"] .pr-inner { color: #4338ca !important; background: rgba(90,111,255,0.18) !important; border-color: rgba(67,56,202,0.5) !important; }
+
         .session-list::-webkit-scrollbar {
             width: 3px;
         }
@@ -5851,6 +5929,14 @@
                 <span class="icon">👤</span>
                 <span class="label">我的</span>
             </button>
+        </div>
+
+        <!-- ===== 下拉刷新指示器（fixed 全局层，脱离所有 overflow 限制） ===== -->
+        <div id="pullRefresh" data-state="ready">
+            <div class="pr-inner">
+                <span class="pr-spinner"></span>
+                <span class="pr-text">下拉刷新在线状态</span>
+            </div>
         </div>
     </div>
 
@@ -12315,6 +12401,13 @@
                 }
                 connections[pid] = conn;
 
+                // 【下拉刷新在线状态】如果当前在等待这个 peer 连接重建成功的回调，立即触发（标记在线）
+                if (typeof _connRefreshListeners !== 'undefined' && _connRefreshListeners[pid]) {
+                    const cb = _connRefreshListeners[pid];
+                    delete _connRefreshListeners[pid];
+                    try { cb(); } catch (e) {}
+                }
+
                 // 心跳状态
                 conn._heartbeatMissed = 0;
 
@@ -12846,6 +12939,12 @@
                     case 'pong':
                         // 心跳回复，重置计数
                         if (connections[from]) connections[from]._heartbeatMissed = 0;
+                        // 【下拉刷新在线状态】如果当前有一次性 pong 回调，调用它标记该 peer 在线
+                        if (typeof _pongRefreshListeners !== 'undefined' && _pongRefreshListeners[from]) {
+                            const cb = _pongRefreshListeners[from];
+                            delete _pongRefreshListeners[from];
+                            try { cb(); } catch (e) {}
+                        }
                         break;
 
                     case 'profile_cover_request':
@@ -13739,6 +13838,252 @@
                     if (warmed > 0) console.log('[rebuildChatBackgroundsFromIDB] 预热 ' + warmed + ' 个会话背景');
                 } catch (e) { console.warn('[migrateChatBackgroundsToMessages] 异常:', e); }
             })();
+
+            // ================================================================
+            // 会话列表下拉刷新 → 刷新在线状态
+            //   仅当 .session-list scrollTop === 0 时才启用下拉；
+            //   · 下拉 ≥ 60px 松开：仅回弹不刷新（箭头朝下，"下拉刷新在线状态"）
+            //   · 下拉 ≥ 90px 松开：进入刷新，调用 refreshOnlineStatuses()
+            //   · 刷新中显示 spinner+文案，最短显示 450ms（避免瞬间完成闪烁）
+            //     最长等待 2.5s（对方离线 ping 超时的兜底）
+            // ================================================================
+            (function setupSessionsPullRefresh() {
+                const list = document.getElementById('sessionList');
+                const box = document.getElementById('pullRefresh');
+                if (!list || !box) return;
+                const READY     = 'ready';
+                const THRESHOLD = 'threshold';
+                const REFRESH   = 'refreshing';
+                const TXT_READY     = '下拉刷新在线状态';
+                const TXT_THRESHOLD = '释放立即刷新';
+                const TXT_REFRESH   = '正在检测在线…';
+
+                const MAX_PULL    = 140;
+                const TRIGGER_AT  = 90;
+                const INDICATOR_H = 56;   // 刷新中的稳定显示偏移量
+                const HIDE_Y      = 80;   // 初始向上隐藏像素（胶囊完全在屏幕外）
+                const APPEAR_AT   = 35;   // 在此下拉距离内完成从"隐藏"到"显形"
+
+                let startY   = 0;
+                let pulling  = false;
+                let curDist  = 0;
+                let busy     = false;
+                let lastY    = 0;
+                let textEl   = box.querySelector('.pr-text');
+
+                // 计算 session-list 在屏幕上的位置，把 fixed 层精确定位到其顶部
+                function positionBox() {
+                    const r = list.getBoundingClientRect();
+                    box.style.left   = r.left + 'px';
+                    box.style.right  = 'auto';
+                    box.style.width  = r.width + 'px';
+                    box.style.top    = r.top + 'px';
+                }
+                // 初始化定位（首次 + 页面切换回来时都要重新计算）
+                positionBox();
+                window.addEventListener('resize', positionBox);
+
+                function setState(s, txt) {
+                    box.setAttribute('data-state', s);
+                    if (textEl && txt) textEl.textContent = txt;
+                }
+                function setBox(h) {
+                    // h = 下拉距离（阻尼后，0~MAX_PULL）
+                    if (h <= 0) {
+                        // 强制隐藏：清除所有内联样式，让 CSS 默认值接管
+                        box.style.opacity = '';
+                        box.style.transform = '';
+                        box.classList.remove('pr-show');
+                        box.classList.remove('pr-pulling');
+                        return;
+                    }
+                    // 1) 显示 ratio：在 APPEAR_AT 内从 0 渐变到 1
+                    const ratio = Math.min(1, h / APPEAR_AT);
+
+                    // 2) 透明度
+                    const opacity = ratio;
+
+                    // 3) translateY：从 -HIDE_Y（完全在屏幕外）→ 0（刚好在列表顶部对齐）→ 正位移（跟手下拉）
+                    const followY = Math.max(0, h - APPEAR_AT);
+                    const translateY = -HIDE_Y * (1 - ratio) + followY;
+
+                    // 4) 应用
+                    box.style.opacity   = opacity.toFixed(3);
+                    box.style.transform = 'translate3d(0, ' + translateY.toFixed(1) + 'px, 0)';
+
+                    // 5) 跟手/回弹 transition 控制
+                    if (pulling) {
+                        box.classList.add('pr-pulling');
+                    } else {
+                        box.classList.remove('pr-pulling');
+                    }
+
+                    // 6) pr-show class 兜底
+                    if (h > 2 || busy) box.classList.add('pr-show');
+                    else               box.classList.remove('pr-show');
+                }
+                function damp(dy) {
+                    if (dy <= 0) return 0;
+                    if (dy < 80)   return dy * 0.9;
+                    if (dy < 180)  return 72 + (dy - 80)  * 0.5;
+                    if (dy < 340)  return 122 + (dy - 180) * 0.3;
+                    return Math.min(MAX_PULL, 170 + (dy - 340) * 0.15);
+                }
+                function onStart(e) {
+                    if (busy) return;
+                    const tgt = e.target;
+                    if (tgt && typeof tgt.closest === 'function' && !tgt.closest('#pageSessions')) return;
+                    if (list.scrollTop > 1) return;
+                    const p = (e.touches && e.touches[0]) ? e.touches[0] : e;
+                    startY  = p.clientY;
+                    lastY   = startY;
+                    pulling = true;
+                    curDist = 0;
+                    positionBox();  // 每次下拉重新定位（防止页面布局变化）
+                }
+                function onMove(e) {
+                    if (!pulling || busy) return;
+                    const p = (e.touches && e.touches[0]) ? e.touches[0] : e;
+                    const dy = p.clientY - startY;
+                    if (dy <= 0) {
+                        pulling = false;
+                        setBox(0);
+                        setState(READY, TXT_READY);
+                        return;
+                    }
+                    if (list.scrollTop > 1) {
+                        pulling = false;
+                        setBox(0);
+                        return;
+                    }
+                    curDist = damp(dy);
+                    setBox(curDist);
+                    if (curDist >= TRIGGER_AT) setState(THRESHOLD, TXT_THRESHOLD);
+                    else                        setState(READY,     TXT_READY);
+                    if (e.cancelable) e.preventDefault();
+                }
+                function onEnd() {
+                    if (!pulling || busy) { pulling = false; return; }
+                    pulling = false;
+                    if (curDist >= TRIGGER_AT) {
+                        busy = true;
+                        setState(REFRESH, TXT_REFRESH);
+                        setBox(INDICATOR_H);
+                        refreshOnlineStatuses(function done() {
+                            // 先把 busy 置为 false，再 setBox(0)，确保 pr-show 正确移除
+                            busy = false;
+                            setState(READY, TXT_READY);
+                            setBox(0);
+                        });
+                    } else {
+                        setBox(0);
+                        setState(READY, TXT_READY);
+                    }
+                }
+                list.addEventListener('touchstart', onStart, { passive: true });
+                list.addEventListener('touchmove',  onMove,  { passive: false });
+                list.addEventListener('touchend',   onEnd,   { passive: true });
+                list.addEventListener('touchcancel',onEnd,   { passive: true });
+                let mouseDown = false;
+                list.addEventListener('mousedown', (e) => {
+                    mouseDown = true;
+                    onStart({ target: e.target, clientY: e.clientY, touches: null });
+                });
+                window.addEventListener('mousemove', (e) => {
+                    if (!mouseDown) return;
+                    onMove({ target: e.target, clientY: e.clientY, touches: null, cancelable: true, preventDefault: () => {} });
+                });
+                window.addEventListener('mouseup', () => {
+                    if (!mouseDown) return;
+                    mouseDown = false; onEnd();
+                });
+            })();
+
+            // 全局 hook 池：下拉刷新在线状态时，回调池
+            //   - pong 包到达（connections[from] 心跳确认）→ _pongRefreshListeners[from] 标记在线
+            //   - 新连接 connect.open → handleNewConnection 时调用 _connRefreshListeners[peerId] 标记在线
+            const _pongRefreshListeners = Object.create(null);
+            const _connRefreshListeners = Object.create(null);
+
+            // 刷新在线状态：遍历 sessions，对【有好友关联或有历史消息的会话】优先检测：
+            //   1) 已有连接 & open → send ping，900ms 内收到 pong 算在线；否则标记离线
+            //   2) 没连接 → connectToPeer 尝试 WebRTC 重建，2s 内连上算在线；否则离线
+            // 整体 2.5s 兜底；最短 UI 停留 450ms，避免瞬间完成造成"胶囊闪一下就没了"
+            function refreshOnlineStatuses(done) {
+                const all = Object.keys(sessions);
+                if (all.length === 0) { done && done(); return; }
+                const minShowMs = 450;
+                const maxWaitMs = 2500;
+                const t0 = Date.now();
+                let settledCount = 0;
+                const total = all.length;
+                function finish() {
+                    const used = Date.now() - t0;
+                    const rem = Math.max(0, minShowMs - used);
+                    setTimeout(() => { renderSessions(); done && done(); }, rem);
+                }
+                // 总超时兜底：2.5s 之后不管有没有回来都算结束
+                const guard = setTimeout(() => { settledCount = total; finish(); }, maxWaitMs);
+                all.forEach(sid => {
+                    if (sid === myPeerId) { settledCount++; if (settledCount >= total) { clearTimeout(guard); finish(); } return; }
+                    const s = sessions[sid];
+                    if (!s) { settledCount++; if (settledCount >= total) { clearTimeout(guard); finish(); } return; }
+                    // 只对好友/曾好友关系 _notFriend=false 或有历史消息的会话做主动探测；纯陌生人不用刷
+                    const shouldProbe = !s._notFriend || (Array.isArray(s.messages) && s.messages.length > 0);
+                    if (!shouldProbe) { settledCount++; if (settledCount >= total) { clearTimeout(guard); finish(); } return; }
+                    const conn = connections[sid];
+                    // ping 成功响应超时
+                    const PING_TO = 900;
+                    let pingTimer = 0;
+                    function markOnline() { s.online = true;  _doneOne(); }
+                    function markOffline(){ s.online = false; _doneOne(); }
+                    function _doneOne() {
+                        clearTimeout(pingTimer);
+                        settledCount++;
+                        if (settledCount >= total) { clearTimeout(guard); finish(); }
+                    }
+                    if (conn && conn.open) {
+                        // 已经有连接 → 发 ping，若 900ms 内没回 pong 视为实际离线
+                        pingTimer = setTimeout(markOffline, PING_TO);
+                        // hook 下一次 pong：直接让 secureSend 发送，如果收到 pong 会走 handleIncomingData
+                        // 为了把这个异步 ping 关联到 markOnline，临时装一个一次性监听器：
+                        if (!conn._prRefreshHooked) {
+                            conn._prRefreshHooked = true;
+                            const _origData = conn._dataCB || null;
+                        }
+                        // 简单方案：用一次性闭包监听 pong 的到达时间点，通过 monkey patch secureSend 很难；
+                        // 改用：_onRefrPingSettled[sid] = markOnline，当 case 'pong' 命中时回调
+                        _pongRefreshListeners[sid] = markOnline;
+                        try {
+                            secureSend(sid, { type: 'ping', time: Date.now() });
+                        } catch (e) {
+                            delete _pongRefreshListeners[sid];
+                            markOffline();
+                        }
+                    } else {
+                        // 没连接：尝试 connectToPeer 重建
+                        // connectToPeer 没有回调，我们用 handleNewConnection 里的 hook 来判定
+                        const timer = setTimeout(() => {
+                            delete _connRefreshListeners[sid];
+                            markOffline();
+                        }, 2000);
+                        _connRefreshListeners[sid] = () => {
+                            clearTimeout(timer);
+                            delete _connRefreshListeners[sid];
+                            markOnline();
+                        };
+                        try {
+                            connectToPeer(sid);
+                        } catch (e) {
+                            delete _connRefreshListeners[sid];
+                            clearTimeout(timer);
+                            markOffline();
+                        }
+                    }
+                });
+                // 空列表（全部被过滤）的兜底：立即结束
+                if (settledCount >= total) { clearTimeout(guard); finish(); }
+            }
 
             renderAll();
             initPeer();
