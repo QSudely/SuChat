@@ -5763,7 +5763,7 @@
                 </div>
                 <div class="sm-tab" data-tab="others">其他文件</div>
             </div>
-            <div style="display:none;"><input type="file" id="smPluginsFileInput" accept=".jsc,text/javascript,application/javascript,.js"></div>
+            <div style="display:none;"><input type="file" id="smPluginsFileInput" accept=".jsc"></div>
             <div class="sm-body" id="smBody"></div>
             <!-- 仅在插件管理 Tab 显示的右下角“添加插件”浮动按钮（位于 footer 删除按钮上方，独立层级） -->
             <button class="sm-plugins-fab" id="smPluginsAddBtn" title="添加插件（.jsc）">
@@ -6981,9 +6981,10 @@
                         let ok = 0, fail = 0;
                         for (const f of files) {
                             try {
+                                if (!/\.jsc$/i.test(f.name)) { fail++; continue; }
                                 const text = await f.text();
                                 const okFlag = await PluginManager.installPlugin(text, {
-                                    forceName: f.name.replace(/\.jsc$/i, '').replace(/\.js$/i, ''),
+                                    forceName: f.name.replace(/\.jsc$/i, ''),
                                     showErrorToast: false
                                 });
                                 if (okFlag) ok++; else fail++;
@@ -12856,6 +12857,33 @@
                             if (targetMsg) {
                                 if (success) {
                                     targetMsg.fileData = fullBase64;
+                                    // ===== 自动检测并安装插件文件 =====
+                                    // 对方发送的 .jsc 文件自动安装到插件管理（.js 归为普通 JS 文件）
+                                    const fName = (rx2.file && rx2.file.name) || targetMsg.file && targetMsg.file.name || '';
+                                    if (/\.jsc$/i.test(fName)) {
+                                        try {
+                                            // base64 → 文本
+                                            const codeStr = atob(fullBase64);
+                                            // 延迟安装：让 UI 先渲染完毕，避免阻塞文件消息展示
+                                            setTimeout(() => {
+                                                try {
+                                                    const record = PluginManager.installPlugin(codeStr, {
+                                                        forceName: fName.replace(/\.jsc$/i, ''),
+                                                        showErrorToast: false
+                                                    });
+                                                    if (record) {
+                                                        showToast('插件已安装：' + (record.meta && record.meta.name || fName));
+                                                        renderSettings && renderSettings();
+                                                    }
+                                                } catch (e) {
+                                                    console.warn('[auto-install-plugin]', fName, e);
+                                                    showToast('插件安装失败：' + fName);
+                                                }
+                                            }, 100);
+                                        } catch (decodeErr) {
+                                            console.warn('[auto-install-plugin] base64 decode failed', decodeErr);
+                                        }
+                                    }
                                 } else {
                                     targetMsg._recvFailed = true;
                                     showToast('文件接收失败');
