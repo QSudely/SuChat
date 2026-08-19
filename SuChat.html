@@ -13859,10 +13859,10 @@
                 const TXT_REFRESH   = '正在检测在线…';
 
                 const MAX_PULL    = 140;
-                const TRIGGER_AT  = 90;
+                const TRIGGER_AT  = 70;
                 const INDICATOR_H = 56;   // 刷新中的稳定显示偏移量
                 const HIDE_Y      = 80;   // 初始向上隐藏像素（胶囊完全在屏幕外）
-                const APPEAR_AT   = 35;   // 在此下拉距离内完成从"隐藏"到"显形"
+                const APPEAR_AT   = 30;   // 在此下拉距离内完成从"隐藏"到"显形"
 
                 let startY   = 0;
                 let pulling  = false;
@@ -14005,15 +14005,16 @@
             const _pongRefreshListeners = Object.create(null);
             const _connRefreshListeners = Object.create(null);
 
-            // 刷新在线状态：遍历 sessions，对【有好友关联或有历史消息的会话】优先检测：
-            //   1) 已有连接 & open → send ping，900ms 内收到 pong 算在线；否则标记离线
-            //   2) 没连接 → connectToPeer 尝试 WebRTC 重建，2s 内连上算在线；否则离线
-            // 整体 2.5s 兜底；最短 UI 停留 450ms，避免瞬间完成造成"胶囊闪一下就没了"
+            // 刷新在线状态（手动下拉触发）：遍历所有会话，检测在线状态
+            //   1) 已有连接 & open → 立即发送 ping(ignoreCrypto)，600ms 内收 pong → 在线
+            //   2) 已有连接但仍在 connecting → 等待连接建立后立即 ping
+            //   3) 没连接 → connectToPeer 尝试重建，1.5s 内连上 → 在线
+            //   整体 1.8s 兜底；最短 UI 停留 450ms
             function refreshOnlineStatuses(done) {
                 const all = Object.keys(sessions);
                 if (all.length === 0) { done && done(); return; }
                 const minShowMs = 450;
-                const maxWaitMs = 2500;
+                const maxWaitMs = 1800;
                 const t0 = Date.now();
                 let settledCount = 0;
                 const total = all.length;
@@ -14022,19 +14023,21 @@
                     const rem = Math.max(0, minShowMs - used);
                     setTimeout(() => { renderSessions(); done && done(); }, rem);
                 }
-                // 总超时兜底：2.5s 之后不管有没有回来都算结束
+                // 总超时兜底
                 const guard = setTimeout(() => { settledCount = total; finish(); }, maxWaitMs);
+
+                const PING_TO = 600;      // ping 响应超时：快速判断在线
+                const CONNECT_WAIT = 1200; // 等待已有连接打开的时间
+                const RECONNECT_TO = 1500; // 重建连接超时
+
                 all.forEach(sid => {
                     if (sid === myPeerId) { settledCount++; if (settledCount >= total) { clearTimeout(guard); finish(); } return; }
                     const s = sessions[sid];
                     if (!s) { settledCount++; if (settledCount >= total) { clearTimeout(guard); finish(); } return; }
-                    // 只对好友/曾好友关系 _notFriend=false 或有历史消息的会话做主动探测；纯陌生人不用刷
-                    const shouldProbe = !s._notFriend || (Array.isArray(s.messages) && s.messages.length > 0);
-                    if (!shouldProbe) { settledCount++; if (settledCount >= total) { clearTimeout(guard); finish(); } return; }
+
                     const conn = connections[sid];
-                    // ping 成功响应超时
-                    const PING_TO = 900;
                     let pingTimer = 0;
+
                     function markOnline() { s.online = true;  _doneOne(); }
                     function markOffline(){ s.online = false; _doneOne(); }
                     function _doneOne() {
@@ -14042,46 +14045,69 @@
                         settledCount++;
                         if (settledCount >= total) { clearTimeout(guard); finish(); }
                     }
-                    if (conn && conn.open) {
-                        // 已经有连接 → 发 ping，若 900ms 内没回 pong 视为实际离线
-                        pingTimer = setTimeout(markOffline, PING_TO);
-                        // hook 下一次 pong：直接让 secureSend 发送，如果收到 pong 会走 handleIncomingData
-                        // 为了把这个异步 ping 关联到 markOnline，临时装一个一次性监听器：
-                        if (!conn._prRefreshHooked) {
-                            conn._prRefreshHooked = true;
-                            const _origData = conn._dataCB || null;
-                        }
-                        // 简单方案：用一次性闭包监听 pong 的到达时间点，通过 monkey patch secureSend 很难；
-                        // 改用：_onRefrPingSettled[sid] = markOnline，当 case 'pong' 命中时回调
+                    function sendPingNow() {
                         _pongRefreshListeners[sid] = markOnline;
                         try {
-                            secureSend(sid, { type: 'ping', time: Date.now() });
+                            // ignoreCrypto:true 跳过加密队列，直接明文发送 ping，零延迟
+                            const ok = secureSend(sid, { type: 'ping', time: Date.now() }, true);
+                            if (!ok) {
+                                delete _pongRefreshListeners[sid];
+                                markOffline();
+                                return;
+                            }
+                            pingTimer = setTimeout(markOffline, PING_TO);
                         } catch (e) {
                             delete _pongRefreshListeners[sid];
                             markOffline();
                         }
+                    }
+
+                    if (conn && conn.open) {
+                        // 已有活跃连接 → 立即发 ping（最快路径）
+                        sendPingNow();
+                    } else if (conn) {
+                        // 连接存在但未 open（connecting 状态）→ 等它就绪
+                        let waited = 0;
+                        const waitStep = 60;
+                        function tryWait() {
+                            if (conn.open) { sendPingNow(); return; }
+                            waited += waitStep;
+                            if (waited >= CONNECT_WAIT) { markOffline(); return; }
+                            // 检查连接是否已失败
+                            const state = conn._state || '';
+                            if (state === 'closed' || state === 'error' || state === 'failed') {
+                                markOffline(); return;
+                            }
+                            pingTimer = setTimeout(tryWait, waitStep);
+                        }
+                        tryWait();
                     } else {
-                        // 没连接：尝试 connectToPeer 重建
-                        // connectToPeer 没有回调，我们用 handleNewConnection 里的 hook 来判定
-                        const timer = setTimeout(() => {
+                        // 无连接 → 尝试重建 WebRTC
+                        _connRefreshListeners[sid] = () => {
+                            clearTimeout(pingTimer);
+                            delete _connRefreshListeners[sid];
+                            // 连接建立成功后立即 ping 确认
+                            _pongRefreshListeners[sid] = markOnline;
+                            try {
+                                secureSend(sid, { type: 'ping', time: Date.now() }, true);
+                            } catch (e) {
+                                markOnline(); // 连接本身已证明在线
+                            }
+                        };
+                        pingTimer = setTimeout(() => {
                             delete _connRefreshListeners[sid];
                             markOffline();
-                        }, 2000);
-                        _connRefreshListeners[sid] = () => {
-                            clearTimeout(timer);
-                            delete _connRefreshListeners[sid];
-                            markOnline();
-                        };
+                        }, RECONNECT_TO);
                         try {
                             connectToPeer(sid);
                         } catch (e) {
                             delete _connRefreshListeners[sid];
-                            clearTimeout(timer);
+                            clearTimeout(pingTimer);
                             markOffline();
                         }
                     }
                 });
-                // 空列表（全部被过滤）的兜底：立即结束
+                // 空列表兜底
                 if (settledCount >= total) { clearTimeout(guard); finish(); }
             }
 
