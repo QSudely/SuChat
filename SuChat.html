@@ -3589,7 +3589,7 @@
             }
             .chat-overlay .chat-header {
                 padding: 8px 10px;
-                min-height: 44px;
+                min-height: 52px;
             }
             .chat-input-area {
                 padding: 4px 8px 8px;
@@ -3656,6 +3656,19 @@
             }
             .bottom-nav .nav-item .label {
                 font-size: 9px;
+            }
+            /* 聊天头部：输入/说话提示在移动端可见 */
+            .chat-overlay .chat-header .c-title-wrap {
+                gap: 0px;
+            }
+            .chat-overlay .chat-header .c-typing {
+                font-size: 10px;
+                overflow: visible;
+                text-overflow: clip;
+            }
+            .chat-overlay .chat-header .c-typing .td {
+                width: 2.5px;
+                height: 2.5px;
             }
             #pageProfile .pf-card {
                 padding: 14px;
@@ -10661,8 +10674,10 @@
                         recordBtn.classList.add('recording');
                         recordStatus.textContent = '录音中... 松手发送';
                         recordTimerInterval = setInterval(updateRecordTimer, 200);
-                        // 显示"对方正在说话"提示
+                        // 显示"对方正在说话"提示，隐藏状态和输入提示
                         if (chatSpeaking) chatSpeaking.style.display = 'flex';
+                        if (chatStatus) chatStatus.style.display = 'none';
+                        if (chatTyping) chatTyping.style.display = 'none';
                     })
                     .catch(err => {
                         showToast('无法访问麦克风: ' + err.message);
@@ -10682,8 +10697,15 @@
                 recordBtn.classList.remove('recording', 'cancel');
                 clearInterval(recordTimerInterval);
                 recordTimerInterval = null;
-                // 隐藏"对方正在说话"提示
+                // 隐藏"对方正在说话"提示，恢复状态显示
                 if (chatSpeaking) chatSpeaking.style.display = 'none';
+                // 恢复在线状态显示
+                if (currentChatId && sessions[currentChatId] && chatStatus) {
+                    chatStatus.style.display = '';
+                    const s = sessions[currentChatId];
+                    chatStatus.textContent = s.online ? '在线' : '离线';
+                    chatStatus.className = 'c-status' + (s.online ? '' : ' offline');
+                }
                 if (cancel) {
                     recordTimer.textContent = '0:00';
                 }
@@ -14668,6 +14690,7 @@
                 if (currentChatId !== peerId) return;
                 chatTyping.style.display = 'flex';
                 chatStatus.style.display = 'none';
+                chatSpeaking.style.display = 'none';
                 clearTimeout(_typingTimers[peerId]);
                 _typingTimers[peerId] = setTimeout(() => {
                     hideTypingIndicator(peerId);
