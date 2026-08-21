@@ -9179,6 +9179,8 @@
                     // 仅展示：好友 / 已有消息记录的会话 / 自己发过消息但 pending 的请求
                     const s = sessions[id];
                     if (!s) return false;
+                    // 被删除的联系人（_notFriend=true）不显示
+                    if (s._notFriend) return false;
                     if (friends.includes(id)) return true;
                     if (Array.isArray(s.messages) && s.messages.length > 0) return true;
                     if (sentRequests[id] && sentRequests[id].status === 'accepted') return true;
