@@ -6772,6 +6772,8 @@
                     if (!sessions[sid]) continue;
                     const msgs = sessions[sid].messages || [];
                     for (const m of msgs) {
+                        // 跳过已清理的文件
+                        if (m._fileCleared) continue;
                         const cls = _classifyFileMsg(m);
                         if (cls !== tab) continue;
                         const size = (m.file && m.file.size) || 0;
@@ -7197,7 +7199,7 @@
                         }
                     } else {
                         // images / videos / voices / texts / apps / html / js / py / others：
-                        //  - 普通消息：清 fileData，保留消息气泡，无 blob 显示"缓存丢失"
+                        //  - 普通消息：清 fileData，保留消息气泡（显示"已清理"状态）
                         //  - 聊天背景（_isBg）：调用 clearSessionBgImage 完整清除 → 该会话自动回到无背景
                         for (const key of sel) {
                             // key = file:sid:msgTime
@@ -7223,6 +7225,7 @@
                                     if (m.time === msgTime) {
                                         delete m.fileData;
                                         m._hasFileData = false;
+                                        m._fileCleared = true; // 标记为已清理，文件管理中不再显示
                                         break;
                                     }
                                 }
