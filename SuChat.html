@@ -2997,6 +2997,17 @@
         .file-card .file-download:active {
             transform: scale(0.95);
         }
+        /* 已清理的文件卡片样式 */
+        .file-card.file-cleared {
+            opacity: 0.7;
+            cursor: pointer;
+        }
+        .file-card.file-cleared:hover {
+            background: rgba(255, 107, 107, 0.1);
+        }
+        .file-card.file-cleared .file-icon {
+            color: #ff6b6b;
+        }
 
         /* 语音播放器 */
         .voice-player {
@@ -5801,7 +5812,7 @@
             <!-- 签名小字 -->
             <div class="pf-footer">
                 <div class="pf-footer-line">Made by Sudely</div>
-                <div class="pf-footer-line">P2P Encrypted · 700+KB</div>
+                <div class="pf-footer-line">P2P Encrypted · 800+KB</div>
             </div>
         </div>
 
@@ -6176,6 +6187,7 @@
             function initAccounts() {
                 let accs = getAccounts();
                 if (accs.list.length === 0) {
+                    // 先检查旧的 STORAGE_KEY（单账号版本）
                     const rawData = localStorage.getItem(STORAGE_KEY);
                     if (rawData) {
                         let parsed = {};
@@ -6207,9 +6219,58 @@
                                 }
                             } catch (e) {}
                         })();
+                    } else {
+                        // 关键修复：扫描所有带前缀的key，恢复账号列表
+                        const recoveredAccounts = scanAndRecoverAccounts();
+                        if (recoveredAccounts.length > 0) {
+                            accs = {
+                                list: recoveredAccounts,
+                                activeId: recoveredAccounts[0].id,
+                                lastActiveIds: recoveredAccounts.map(a => a.id)
+                            };
+                            saveAccounts(accs);
+                            console.log('[initAccounts] 从数据key恢复了', recoveredAccounts.length, '个账号');
+                        }
                     }
                 }
                 return accs;
+            }
+            // 扫描 localStorage 中所有带前缀的数据key，恢复账号信息
+            function scanAndRecoverAccounts() {
+                const accounts = [];
+                const prefix = STORAGE_KEY + '__';
+                const seenIds = new Set();
+                // 收集所有带前缀的key
+                const dataKeys = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && key.startsWith(prefix)) {
+                        const id = key.substring(prefix.length);
+                        if (!seenIds.has(id)) {
+                            seenIds.add(id);
+                            dataKeys.push({ id, key });
+                        }
+                    }
+                }
+                // 从每个key读取账号信息
+                for (const { id, key } of dataKeys) {
+                    try {
+                        const raw = localStorage.getItem(key);
+                        if (raw) {
+                            const data = JSON.parse(raw);
+                            accounts.push({
+                                id: id,
+                                name: data.myName || '旅行者',
+                                peerId: data.myPeerId || generatePeerId(),
+                                avatar: data.myAvatar || null,
+                                createdAt: data.myCreatedAt || Date.now()
+                            });
+                        }
+                    } catch (e) {
+                        // 跳过无效数据
+                    }
+                }
+                return accounts;
             }
             const LIMITS = {
                 image: 10 * 1024 * 1024,
@@ -6222,6 +6283,7 @@
             let myName = '旅行者';
             let myPeerId = null;
             let myAvatar = null;
+            let myCreatedAt = Date.now();
             let myProfileCover = localStorage.getItem('suchat_profile_cover') || null;
             let sessions = {};
             let friends = [];
@@ -6373,6 +6435,7 @@
                         myName = data.myName || '旅行者';
                         myAvatar = data.myAvatar || null;
                         myPeerId = data.myPeerId || null;
+                        myCreatedAt = data.myCreatedAt || Date.now();
                         _replaceArrayInPlace(plugins, data.plugins || []);
                     }
                 } catch (e) {}
@@ -8721,6 +8784,7 @@
                     myName,
                     myAvatar,
                     myPeerId,
+                    myCreatedAt: myCreatedAt || Date.now(),
                     plugins
                 };
                 // 3b) 同步写 localStorage 冷备份：剥离 fileData 和 sticker base64，确保配额不超限
@@ -9500,16 +9564,31 @@
                                     </div>
                                 `;
                         } else {
-                            contentHtml = `
-                                    <div class="file-card" data-file='${escapeHtml(fileObj)}' data-msgid="${msgId}">
-                                        <span class="file-icon">${icon}</span>
-                                        <div class="file-info">
-                                            <div class="file-name">${escapeHtml(file.name || '文件')}</div>
-                                            <div class="file-size">${sizeText}</div>
+                            // 普通文件：检查文件数据是否存在
+                            const hasData = blobUrl || msg.fileData || msg._hasFileData;
+                            if (!hasData) {
+                                // 文件数据已被清理，显示"已清理"状态
+                                contentHtml = `
+                                        <div class="file-card file-cleared" data-file='${escapeHtml(fileObj)}' data-msgid="${msgId}" title="文件损坏或已被清理">
+                                            <span class="file-icon">⚠️</span>
+                                            <div class="file-info">
+                                                <div class="file-name">${escapeHtml(file.name || '文件')}</div>
+                                                <div class="file-size" style="color:#ff6b6b;">文件损坏或已被清理</div>
+                                            </div>
                                         </div>
-                                        <button class="file-download" data-fileid="${fileId}">⬇ 下载</button>
-                                    </div>
-                                `;
+                                    `;
+                            } else {
+                                contentHtml = `
+                                        <div class="file-card" data-file='${escapeHtml(fileObj)}' data-msgid="${msgId}">
+                                            <span class="file-icon">${icon}</span>
+                                            <div class="file-info">
+                                                <div class="file-name">${escapeHtml(file.name || '文件')}</div>
+                                                <div class="file-size">${sizeText}</div>
+                                            </div>
+                                            <button class="file-download" data-fileid="${fileId}">⬇ 下载</button>
+                                        </div>
+                                    `;
+                            }
                         }
                     } else {
                         const baseText = escapeHtml(msg.text || '');
@@ -9832,6 +9911,11 @@
                         // 其他文件：查 file-card 卡片
                         const fileCard = el.querySelector('.file-card');
                         if (fileCard) {
+                            // 检查是否是已清理的文件
+                            if (fileCard.classList.contains('file-cleared')) {
+                                showToast('文件损坏或已被清理');
+                                return;
+                            }
                             const fileData = fileCard.dataset.file ? JSON.parse(fileCard.dataset.file) : null;
                             if (fileData) {
                                 const blobUrl = window._fileBlobs && window._fileBlobs[fileData.id];
@@ -13238,8 +13322,13 @@
                                     const fName = (rx2.file && rx2.file.name) || targetMsg.file && targetMsg.file.name || '';
                                     if (/\.jsc$/i.test(fName)) {
                                         try {
-                                            // base64 → 文本
-                                            const codeStr = atob(fullBase64);
+                                            // base64 → Uint8Array → UTF-8 字符串（支持中文等多字节字符）
+                                            const binaryString = atob(fullBase64);
+                                            const bytes = new Uint8Array(binaryString.length);
+                                            for (let i = 0; i < binaryString.length; i++) {
+                                                bytes[i] = binaryString.charCodeAt(i);
+                                            }
+                                            const codeStr = new TextDecoder('utf-8').decode(bytes);
                                             // 延迟安装：让 UI 先渲染完毕，避免阻塞文件消息展示
                                             setTimeout(() => {
                                                 try {
@@ -13941,7 +14030,7 @@
                 // 重置内存状态为新账号
                 sessions = {}; friends = []; friendRequests = {}; sentRequests = {};
                 chatBackgrounds = {}; stickers.length = 0; plugins.length = 0; currentChatId = null;
-                myName = '旅行者'; myAvatar = null; myPeerId = newPeerId; myProfileCover = null;
+                myName = '旅行者'; myAvatar = null; myPeerId = newPeerId; myCreatedAt = Date.now(); myProfileCover = null;
                 if (window._fileBlobs) { for (const k in window._fileBlobs) { try { URL.revokeObjectURL(window._fileBlobs[k]); } catch(e){} } window._fileBlobs = {}; }
                 // 保存新账号空数据，并等待 IDB 写入完成
                 await saveData({ immediate: true });
@@ -14394,8 +14483,43 @@
             try { PluginManager.initAll(); } catch (e) { console.warn('[PluginManager.initAll]', e); }
             if (!myAvatar) myAvatar = getDefaultAvatar(myName);
             if (!myPeerId) {
-                myPeerId = generatePeerId();
-                saveData();
+                // 关键修复：如果账号列表不为空，但 myPeerId 为空，说明数据可能丢失
+                // 尝试从 IDB 加载数据
+                (async function tryLoadFromIDB() {
+                    try {
+                        const idbData = await idbMetaGet();
+                        if (idbData && idbData.myPeerId) {
+                            // 从 IDB 恢复数据
+                            sessions = idbData.sessions || {};
+                            friends = idbData.friends || [];
+                            friendRequests = idbData.friendRequests || {};
+                            sentRequests = idbData.sentRequests || {};
+                            chatBackgrounds = idbData.chatBackgrounds || {};
+                            myName = idbData.myName || '旅行者';
+                            myAvatar = idbData.myAvatar || null;
+                            myPeerId = idbData.myPeerId;
+                            myCreatedAt = idbData.myCreatedAt || Date.now();
+                            if (idbData.stickers) {
+                                _replaceArrayInPlace(stickers, idbData.stickers);
+                            }
+                            if (idbData.plugins) {
+                                _replaceArrayInPlace(plugins, idbData.plugins);
+                            }
+                            console.log('[init] 从 IDB 恢复了账号数据:', myPeerId);
+                            // 重新渲染
+                            renderAll();
+                            try { updateStorageUsage(); } catch(e){}
+                        }
+                    } catch (e) {
+                        console.warn('[init] IDB 加载失败:', e);
+                    }
+                    // 如果仍然没有 myPeerId，才生成新的
+                    if (!myPeerId) {
+                        myPeerId = generatePeerId();
+                        saveData();
+                        console.log('[init] 生成了新的 peerId:', myPeerId);
+                    }
+                })();
             }
 
             // 初始化 blobUrl 缓存（渲染时按需懒加载，不在初始化时全量解析 base64）
