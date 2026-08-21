@@ -188,6 +188,8 @@
         }
         html[data-theme="light"] .chat-overlay .chat-header .back-btn { color: var(--c-text-2); }
         html[data-theme="light"] .chat-overlay .chat-header .c-title { color: var(--c-text); }
+        html[data-theme="light"] .chat-overlay .chat-header .c-typing { color: #2e6cf4; }
+        html[data-theme="light"] .chat-overlay .chat-header .c-typing .td { background: #2e6cf4; }
         html[data-theme="light"] .chat-overlay .chat-header .settings-btn {
             background: var(--c-bg-hover);
             border-color: var(--c-border-soft);
@@ -1110,6 +1112,22 @@
         #pageProfile .pf-reset-btn:active {
             transform: scale(0.95);
         }
+        #pageProfile .pf-delete-btn {
+            display: block;
+            width: 100%;
+            padding: 8px 0;
+            border-radius: 10px;
+            border: 1px solid var(--c-danger-soft-border);
+            font-size: 14px;
+            cursor: pointer;
+            font-family: inherit;
+            background: var(--c-danger-soft-bg);
+            color: var(--c-danger);
+            font-weight: 500;
+        }
+        #pageProfile .pf-delete-btn:active {
+            transform: scale(0.95);
+        }
         #pageProfile .pf-import-btn,
         #pageProfile .pf-export-btn {
             display: block;
@@ -1808,14 +1826,42 @@
             padding: 0 4px;
             line-height: 1;
         }
-        .chat-overlay .chat-header .c-title {
+        .chat-overlay .chat-header .c-title-wrap {
             flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+        .chat-overlay .chat-header .c-title {
             color: #eef2f8;
             font-weight: 500;
             font-size: 15px;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+        .chat-overlay .chat-header .c-typing {
+            font-size: 11px;
+            color: #7aa2f7;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+        .chat-overlay .chat-header .c-typing .td {
+            display: inline-block;
+            width: 3px; height: 3px; border-radius: 50%;
+            background: #7aa2f7;
+            animation: typingBlink 1.4s infinite ease-in-out;
+        }
+        .chat-overlay .chat-header .c-typing .td:nth-child(2) { animation-delay: 0.2s; }
+        .chat-overlay .chat-header .c-typing .td:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typingBlink {
+            0%, 60%, 100% { opacity: 0.15; }
+            30% { opacity: 1; }
         }
         .chat-overlay .chat-header .c-status {
             font-size: 11px;
@@ -5713,11 +5759,17 @@
             <!-- 关于账号 -->
             <div class="pf-card" style="display:flex;flex-direction:column;gap:10px;">
                 <div class="pf-section-title">—— 关于账号 ——</div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <label style="font-size:13px;color:var(--c-text-2);white-space:nowrap;">当前账号</label>
+                    <select id="accountSelect" style="flex:1;padding:6px 8px;border-radius:8px;border:1px solid var(--c-border-soft);background:var(--c-bg-card);color:var(--c-text);font-size:13px;font-family:inherit;"></select>
+                </div>
+                <button id="profileNewAccountBtn" class="pf-export-btn">✦ 新建账号</button>
                 <div class="pf-btn-row">
                     <button id="profileImportBtn" class="pf-import-btn">📥 导入账号</button>
                     <button id="profileExportBtn" class="pf-export-btn">📤 导出账号</button>
                 </div>
                 <button id="profileResetBtn" class="pf-reset-btn">重置账号</button>
+                <button id="profileDeleteAccountBtn" class="pf-delete-btn">删除账号</button>
             </div>
 
             <!-- 应用 -->
@@ -5762,6 +5814,7 @@
                     <span>插件管理</span>
                 </div>
                 <div class="sm-tab" data-tab="others">其他文件</div>
+                <div class="sm-tab" data-tab="accounts">账号管理</div>
             </div>
             <div style="display:none;"><input type="file" id="smPluginsFileInput" accept=".jsc"></div>
             <div class="sm-body" id="smBody"></div>
@@ -5780,7 +5833,11 @@
         <div class="chat-overlay" id="chatOverlay">
             <div class="chat-header">
                 <button class="back-btn" id="chatBackBtn">‹</button>
-                <div class="c-title" id="chatTitle">Sudely.com</div>
+                <div class="c-title-wrap">
+                    <div class="c-title" id="chatTitle">Sudely.com</div>
+                    <div class="c-typing" id="chatTyping" style="display:none;">对方正在输入<span class="td"></span><span class="td"></span><span class="td"></span></div>
+                    <div class="c-typing" id="chatSpeaking" style="display:none;color:#52c41a;">对方正在说话<span class="td"></span><span class="td"></span><span class="td"></span></div>
+                </div>
                 <div class="c-status" id="chatStatus">在线</div>
                 <button class="settings-btn" id="settingsBtn">☰</button>
             </div>
@@ -6067,6 +6124,80 @@
             // ================================================================
             const STORAGE_KEY = 'chat_app_data';
             const FILE_DATA_KEY = 'chat_app_file_data';
+            const ACCOUNTS_KEY = 'suchat_accounts'; // 多账号列表 + 当前活跃账号
+            const MAX_ACCOUNTS = 3;
+
+            // ===== 多账号管理 =====
+            // accounts 结构: { list: [{id, name, peerId, avatar, createdAt}], activeId: 'xxx', lastActiveIds: ['xxx','yyy'] }
+            function getAccounts() {
+                try {
+                    const raw = localStorage.getItem(ACCOUNTS_KEY);
+                    if (raw) return JSON.parse(raw);
+                } catch (e) {}
+                return { list: [], activeId: null, lastActiveIds: [] };
+            }
+            function saveAccounts(accs) {
+                try { localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accs)); } catch (e) {}
+            }
+            // 账号内部 ID 生成：acc_ + 时间戳 + 随机数，永不冲突
+            function generateAccountId() {
+                return 'acc_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 8);
+            }
+            // 统一 Peer ID 生成：6 位 mixed-case（大小写字母+数字），兼容旧 ID
+            function generatePeerId() {
+                const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+                let id = 'user-';
+                for (let i = 0; i < 6; i++) {
+                    id += chars.charAt(Math.floor(Math.random() * chars.length));
+                }
+                return id;
+            }
+            // 当前账号在 localStorage / IDB 中的键前缀（使用账号内部 ID，与 peerId 解耦）
+            function accountKey(baseKey) {
+                const accs = getAccounts();
+                const aid = accs.activeId;
+                if (!aid) return baseKey;
+                return baseKey + '__' + aid;
+            }
+            // 初始化账号列表（首次运行/旧版本迁移）
+            function initAccounts() {
+                let accs = getAccounts();
+                if (accs.list.length === 0) {
+                    const rawData = localStorage.getItem(STORAGE_KEY);
+                    if (rawData) {
+                        let parsed = {};
+                        try { parsed = JSON.parse(rawData); } catch(e) {}
+                        // 关键修复：生成唯一的内部账号 ID（与 peerId 解耦，永不冲突）
+                        const internalId = generateAccountId();
+                        accs = {
+                            list: [{
+                                id: internalId,
+                                name: parsed.myName || '旅行者',
+                                peerId: parsed.myPeerId || generatePeerId(),
+                                avatar: parsed.myAvatar || null,
+                                createdAt: Date.now()
+                            }],
+                            activeId: internalId,
+                            lastActiveIds: [internalId]
+                        };
+                        saveAccounts(accs);
+                        // 把旧数据复制到带内部 ID 前缀的 key
+                        const prefixedKey = STORAGE_KEY + '__' + internalId;
+                        localStorage.setItem(prefixedKey, rawData);
+                        // 同步复制 IDB meta 到前缀 key
+                        (async () => {
+                            try {
+                                const rawMeta = await idbMetaGet(IDB_META_KEY);
+                                if (rawMeta) {
+                                    const prefixedMetaKey = IDB_META_KEY + '__' + internalId;
+                                    await idbMetaPut(rawMeta, prefixedMetaKey);
+                                }
+                            } catch (e) {}
+                        })();
+                    }
+                }
+                return accs;
+            }
             const LIMITS = {
                 image: 10 * 1024 * 1024,
                 video: 50 * 1024 * 1024,
@@ -6130,6 +6261,8 @@
             const chatBackBtn = document.getElementById('chatBackBtn');
             const chatTitle = document.getElementById('chatTitle');
             const chatStatus = document.getElementById('chatStatus');
+            const chatTyping = document.getElementById('chatTyping');
+            const chatSpeaking = document.getElementById('chatSpeaking');
             const chatMessages = document.getElementById('chatMessages');
             const chatInput = document.getElementById('chatInput');
             const chatSendBtn = document.getElementById('chatSendBtn');
@@ -6212,8 +6345,10 @@
 
             function loadData() {
                 // 1) 同步：localStorage 冷备份（首次启动 / IDB 未就绪时的兜底）
+                // 多账号：用 accountKey(STORAGE_KEY) 隔离，第一个账号（迁移）兼容旧 key
+                const sk = accountKey(STORAGE_KEY);
                 try {
-                    const raw = localStorage.getItem(STORAGE_KEY);
+                    const raw = localStorage.getItem(sk);
                     if (raw) {
                         const data = JSON.parse(raw);
                         sessions = data.sessions || {};
@@ -6236,7 +6371,7 @@
                         for (let m of msgs) {
                             if (m.file && typeof m.time !== 'undefined') {
                                 // 优先看 localStorage 旧 key
-                                const fkey = FILE_DATA_KEY + ':' + sid + ':' + m.time;
+                                const fkey = accountKey(FILE_DATA_KEY) + ':' + sid + ':' + m.time;
                                 if (localStorage.getItem(fkey) !== null) {
                                     m._hasFileData = true;
                                 } else {
@@ -6479,6 +6614,10 @@
             // 收集所有分类下的条目
             async function _smCollectEntries(tab) {
                 const entries = [];
+                if (tab === 'accounts') {
+                    // 账号管理不需要收集条目，直接返回空数组
+                    return [];
+                }
                 if (tab === 'sessions') {
                     for (const sid in sessions) {
                         if (!sessions[sid]) continue;
@@ -6589,6 +6728,37 @@
             // 渲染指定 tab
             async function renderFileMgrTab(tab) {
                 _smCurrentTab = tab || 'sessions';
+                // 账号管理 tab：立即渲染，不等待数据收集
+                if (_smCurrentTab === 'accounts') {
+                    _smRevokeAll();
+                    _smSelected.clear();
+                    document.querySelectorAll('#smTabs .sm-tab').forEach(el => {
+                        el.classList.toggle('active', el.dataset.tab === _smCurrentTab);
+                    });
+                    const body = document.getElementById('smBody');
+                    if (!body) return;
+                    const accs = getAccounts();
+                    let html = '<div class="sm-list">';
+                    for (const a of accs.list) {
+                        const isActive = a.id === accs.activeId;
+                        const avatar = a.avatar || getDefaultAvatar(a.name);
+                        const selKey = 'acc:' + a.id;
+                        const isChecked = _smSelected.has(selKey);
+                        html += '<div class="sm-session-item' + (isActive ? ' active' : '') + '" data-key="' + selKey + '" style="' + (isActive ? 'border-left:3px solid #7aa2f7;' : '') + '">' +
+                            '<input type="checkbox" data-sm-check ' + (isChecked ? 'checked' : '') + '>' +
+                            '<div class="sm-session-avatar"><img src="' + avatar + '" onerror="this.style.display=\'none\'"></div>' +
+                            '<div class="sm-session-info">' +
+                                '<div class="sm-session-name">' + escapeHtml(a.name) + (isActive ? ' <span style="color:#7aa2f7;font-size:11px;">● 当前</span>' : '') + '</div>' +
+                                '<div class="sm-session-meta">ID: ' + escapeHtml(a.peerId || a.id) + ' · 创建于 ' + (a.createdAt ? new Date(a.createdAt).toLocaleDateString() : '-') + '</div>' +
+                            '</div>' +
+                        '</div>';
+                    }
+                    html += '</div>';
+                    body.innerHTML = html;
+                    _smEntries = accs.list.map(a => ({ ...a, key: 'acc:' + a.id }));
+                    _updateSMFooter();
+                    return;
+                }
                 // 插件 Tab 的浮动按钮显隐标记
                 const mgrEl = document.getElementById('pageStorageMgr');
                 if (mgrEl) {
@@ -6839,6 +7009,116 @@
                             } catch (err) { console.warn('[plugin uninstall]', pid, err); }
                         }
                         saveData();
+                    } else if (tab === 'accounts') {
+                        // 账号删除
+                        const accs = getAccounts();
+                        const deleteIds = sel.map(k => k.slice(4)); // 去掉 acc:
+                        // 如果全选删除，则不删除
+                        if (deleteIds.length >= accs.list.length) {
+                            showToast('至少保留一个账号');
+                            return;
+                        }
+                        const activeId = accs.activeId;
+                        const deletingActive = deleteIds.includes(activeId);
+                        // 再次确认
+                        if (!(await showConfirm({
+                            title: '删除账号',
+                            message: '确定删除选中的 ' + deleteIds.length + ' 个账号吗？\n\n• 账号数据将被永久删除\n• 操作不可撤销',
+                            confirmText: '删除',
+                            danger: true
+                        }))) return;
+                        // 分离当前账号和其他账号的删除逻辑
+                        const otherDeleteIds = deleteIds.filter(id => id !== activeId);
+                        const willRemoveActive = deletingActive;
+                        // 先处理非当前账号（从账号列表移除）
+                        for (const id of otherDeleteIds) {
+                            const acc = accs.list.find(a => a.id === id);
+                            if (!acc) continue;
+                            // 清除该账号的 localStorage 数据
+                            try {
+                                const accPrefix = 'suchat__' + id;
+                                const keysToRemove = [];
+                                for (let i = 0; i < localStorage.length; i++) {
+                                    const k = localStorage.key(i);
+                                    if (k && k.startsWith(accPrefix)) keysToRemove.push(k);
+                                }
+                                keysToRemove.forEach(k => localStorage.removeItem(k));
+                            } catch(e) {}
+                            // 从账号列表移除
+                            accs.list = accs.list.filter(a => a.id !== id);
+                            // 从最近使用列表移除
+                            accs.lastActiveIds = accs.lastActiveIds.filter(aid => aid !== id);
+                            deletedCount++;
+                        }
+                        if (willRemoveActive) {
+                            // 删除当前账号并切换到最近使用的账号
+                            const currentAcc = accs.list.find(a => a.id === activeId);
+                            // 通知好友
+                            const resetMsg = { type: 'account_reset', from: myPeerId };
+                            for (let id in connections) { try { secureSend(id, resetMsg, true); } catch(e){} }
+                            // 关闭连接
+                            for (let id in connections) { try { connections[id].close(); } catch (e) {} }
+                            connections = {};
+                            if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+                            // 清除当前账号的 IDB 数据
+                            const metaKey = accountKey(IDB_META_KEY);
+                            idbMetaClear(metaKey).catch(() => {});
+                            const accSuffix = '__' + activeId;
+                            try {
+                                const db = await idbOpen();
+                                const tx = db.transaction(IDB_STORE, 'readwrite');
+                                const store = tx.objectStore(IDB_STORE);
+                                const req = store.openCursor();
+                                req.onsuccess = (e) => {
+                                    const cursor = e.target.result;
+                                    if (cursor) {
+                                        if (typeof cursor.key === 'string' && cursor.key.endsWith(accSuffix)) {
+                                            cursor.delete();
+                                        }
+                                        cursor.continue();
+                                    }
+                                };
+                            } catch(e) { console.warn('[deleteAccount] IDB files clear failed:', e); }
+                            // 清除 localStorage
+                            try {
+                                const accPrefix = 'suchat__' + activeId;
+                                const keysToRemove = [];
+                                for (let i = 0; i < localStorage.length; i++) {
+                                    const k = localStorage.key(i);
+                                    if (k && k.startsWith(accPrefix)) keysToRemove.push(k);
+                                }
+                                keysToRemove.forEach(k => localStorage.removeItem(k));
+                            } catch(e) {}
+                            // 从账号列表移除
+                            accs.list = accs.list.filter(a => a.id !== activeId);
+                            // 切换到最近使用的账号
+                            const nextId = accs.lastActiveIds.find(id => accs.list.some(a => a.id === id)) || accs.list[0].id;
+                            accs.lastActiveIds = accs.lastActiveIds.filter(id => id !== activeId && id !== nextId);
+                            accs.activeId = nextId;
+                            saveAccounts(accs);
+                            // 重置内存并加载目标账号
+                            sessions = {}; friends = []; friendRequests = {}; sentRequests = {};
+                            chatBackgrounds = {}; stickers.length = 0; plugins.length = 0; currentChatId = null;
+                            myName = '旅行者'; myAvatar = null; myPeerId = null; myProfileCover = null;
+                            if (window._fileBlobs) { for (const k in window._fileBlobs) { try { URL.revokeObjectURL(window._fileBlobs[k]); } catch(e){} } window._fileBlobs = {}; }
+                            localStorage.removeItem('suchat_profile_cover');
+                            loadData();
+                            loadDataFromIDB(() => {
+                                try { PluginManager.initAll(); } catch(e){}
+                                if (!myAvatar) myAvatar = getDefaultAvatar(myName);
+                                chatOverlay.classList.remove('active');
+                                settingsMenu.classList.remove('active');
+                                searchBar.classList.remove('active');
+                                renderAll();
+                                renderAccountSelect();
+                                initPeer();
+                            });
+                        } else {
+                            // 只删除非当前账号，保存更改
+                            saveAccounts(accs);
+                            saveData();
+                            renderAccountSelect();
+                        }
                     } else {
                         // images / videos / voices / texts / apps / html / js / py / others：
                         //  - 普通消息：清 fileData，保留消息气泡，无 blob 显示"缓存丢失"
@@ -7056,6 +7336,7 @@
                                 if (_smCurrentTab === 'sessions') k = 'sid:' + e.sid;
                                 else if (_smCurrentTab === 'stickers') k = 'sticker:' + e.id;
                                 else if (_smCurrentTab === 'plugins') k = e.id; // already 'plug:xxx'
+                                else if (_smCurrentTab === 'accounts') k = 'acc:' + e.id;
                                 else k = 'file:' + e.sid + ':' + e.msgTime;
                                 _smSelected.add(k);
                             }
@@ -7164,6 +7445,29 @@
                         tx.objectStore(IDB_STORE).clear();
                         tx.oncomplete = () => resolve();
                         tx.onerror = () => resolve();
+                    } catch (e) { resolve(); }
+                });
+            }
+            // 清除指定后缀的所有 IDB 文件条目（按账号隔离）
+            async function idbClearBySuffix(suffix) {
+                const db = await idbOpen();
+                return new Promise((resolve) => {
+                    try {
+                        const tx = db.transaction(IDB_STORE, 'readwrite');
+                        const store = tx.objectStore(IDB_STORE);
+                        const req = store.openCursor();
+                        req.onsuccess = (e) => {
+                            const cursor = e.target.result;
+                            if (cursor) {
+                                if (typeof cursor.key === 'string' && cursor.key.endsWith(suffix)) {
+                                    cursor.delete();
+                                }
+                                cursor.continue();
+                            } else {
+                                resolve();
+                            }
+                        };
+                        req.onerror = () => resolve();
                     } catch (e) { resolve(); }
                 });
             }
@@ -7276,32 +7580,35 @@
             }
 
             // ---- 主数据 store（meta）----
-            async function idbMetaPut(obj) {
+            async function idbMetaPut(obj, key) {
                 const db = await idbOpen();
+                const metaKey = key || accountKey(IDB_META_KEY);
                 return new Promise((resolve, reject) => {
                     const tx = db.transaction(IDB_META_STORE, 'readwrite');
-                    tx.objectStore(IDB_META_STORE).put({ key: IDB_META_KEY, data: obj, t: Date.now() });
+                    tx.objectStore(IDB_META_STORE).put({ key: metaKey, data: obj, t: Date.now() });
                     tx.oncomplete = () => resolve(true);
                     tx.onerror = () => reject(tx.error);
                 });
             }
-            async function idbMetaGet() {
+            async function idbMetaGet(key) {
                 const db = await idbOpen();
+                const metaKey = key || accountKey(IDB_META_KEY);
                 return new Promise((resolve) => {
                     try {
                         const tx = db.transaction(IDB_META_STORE, 'readonly');
-                        const req = tx.objectStore(IDB_META_STORE).get(IDB_META_KEY);
+                        const req = tx.objectStore(IDB_META_STORE).get(metaKey);
                         req.onsuccess = () => resolve(req.result ? req.result.data : null);
                         req.onerror = () => resolve(null);
                     } catch (e) { resolve(null); }
                 });
             }
-            async function idbMetaClear() {
+            async function idbMetaClear(key) {
                 const db = await idbOpen();
+                const metaKey = key || accountKey(IDB_META_KEY);
                 return new Promise((resolve) => {
                     try {
                         const tx = db.transaction(IDB_META_STORE, 'readwrite');
-                        tx.objectStore(IDB_META_STORE).clear();
+                        tx.objectStore(IDB_META_STORE).delete(metaKey);
                         tx.oncomplete = () => resolve();
                         tx.onerror = () => resolve();
                     } catch (e) { resolve(); }
@@ -8243,13 +8550,23 @@
             // 不查内存缓存（内存是 blobUrl，与本接口语义不同）
             async function loadFileDataAsync(sid, msgTime) {
                 if (!sid || !msgTime) return null;
-                const key = sid + ':' + msgTime;
-                // 1) 先 IDB
-                const rec = await idbGet(key);
+                const key = accountKey(sid + ':' + msgTime);
+                // 1) 先 IDB（带账号前缀）
+                let rec = await idbGet(key);
                 if (rec && rec.blob) return rec;
-                // 2) 兼容：IDB 没有就查 localStorage 旧 key
+                // 1b) 兼容旧数据：IDB 无前缀 key（多账号迁移前的数据）
+                const rawKey = sid + ':' + msgTime;
+                if (key !== rawKey) {
+                    rec = await idbGet(rawKey);
+                    if (rec && rec.blob) {
+                        // 迁移到带前缀的 key，下次直接命中
+                        idbPut(key, rec.blob, rec.meta || { time: msgTime }).catch(() => {});
+                        return rec;
+                    }
+                }
+                // 2) 兼容：查 localStorage 旧 key
                 try {
-                    const legacy = localStorage.getItem(FILE_DATA_KEY + ':' + key);
+                    const legacy = localStorage.getItem(accountKey(FILE_DATA_KEY) + ':' + sid + ':' + msgTime);
                     if (legacy) {
                         const blob = _base64ToBlob(legacy);
                         if (blob) {
@@ -8265,7 +8582,7 @@
             // 同步：仅查 localStorage 旧数据（兼容老调用方）
             function loadFileData(sid, msgTime) {
                 try {
-                    return localStorage.getItem(FILE_DATA_KEY + ':' + sid + ':' + msgTime);
+                    return localStorage.getItem(accountKey(FILE_DATA_KEY) + ':' + sid + ':' + msgTime);
                 } catch (e) { return null; }
             }
 
@@ -8282,10 +8599,10 @@
                     blob = _base64ToBlob(fileData, mime);
                 }
                 if (!blob) return false;
-                const key = sid + ':' + msgTime;
+                const key = accountKey(sid + ':' + msgTime);
                 idbPut(key, blob, { time: msgTime, size: blob.size, type: blob.type }).then(() => {
                     // 写入成功后顺手清理 localStorage 中的同名旧 key（迁移）
-                    try { localStorage.removeItem(FILE_DATA_KEY + ':' + key); } catch (e) {}
+                    try { localStorage.removeItem(accountKey(FILE_DATA_KEY) + ':' + sid + ':' + msgTime); } catch (e) {}
                 }).catch((e) => {
                     // 不再做 LRU 淘汰，失败就报错（空间不够时由用户在文件管理中手动清理）
                     console.warn('[saveFileDataItem] IDB 写入失败（请在文件管理中清理空间）:', e);
@@ -8296,18 +8613,25 @@
             // 删除单个文件的 fileData（IDB + localStorage 兼容旧 key）
             function deleteFileDataItem(sid, msgTime) {
                 if (!sid || !msgTime) return;
-                idbDelete(sid + ':' + msgTime).catch(() => {});
-                try { localStorage.removeItem(FILE_DATA_KEY + ':' + sid + ':' + msgTime); } catch (e) {}
+                idbDelete(accountKey(sid + ':' + msgTime)).catch(() => {});
+                try { localStorage.removeItem(accountKey(FILE_DATA_KEY) + ':' + sid + ':' + msgTime); } catch (e) {}
             }
 
             // 清除所有文件数据（用于账号重置）
             function clearAllFileData() {
-                idbClearAll().catch(() => {});
+                // 只清当前账号的 IDB 文件数据（按账号后缀匹配）
+                const accSuffix = '__' + (getAccounts().activeId || '');
+                if (accSuffix !== '__') {
+                    idbClearBySuffix(accSuffix).catch(() => {});
+                } else {
+                    idbClearAll().catch(() => {});
+                }
                 try {
                     const keysToRemove = [];
+                    const prefix = accountKey(FILE_DATA_KEY) + ':';
                     for (let i = 0; i < localStorage.length; i++) {
                         const k = localStorage.key(i);
-                        if (k && k.startsWith(FILE_DATA_KEY + ':')) keysToRemove.push(k);
+                        if (k && k.startsWith(prefix)) keysToRemove.push(k);
                     }
                     keysToRemove.forEach(k => localStorage.removeItem(k));
                 } catch (e) {}
@@ -8316,9 +8640,9 @@
             // 清除指定会话的所有文件数据
             function clearFileDataBySession(sid) {
                 if (!sid) return;
-                idbClearBySid(sid).catch(() => {});
+                idbClearBySid(accountKey(sid)).catch(() => {});
                 try {
-                    const prefix = FILE_DATA_KEY + ':' + sid + ':';
+                    const prefix = accountKey(FILE_DATA_KEY) + ':' + sid + ':';
                     const keysToRemove = [];
                     for (let i = 0; i < localStorage.length; i++) {
                         const k = localStorage.key(i);
@@ -8332,11 +8656,10 @@
             let _saveDataTimer = null;
             let _saveDataImmediate = false; // 标记是否需要立即写入（如删除好友等关键操作）
             function saveData(opts) {
-                // 关键操作（如删除好友、重置账号）需要立即同步写入
+                // 关键操作（如删除好友、重置账号、账号切换）需要立即同步写入，并等待完成
                 if (opts && opts.immediate) {
                     if (_saveDataTimer) { clearTimeout(_saveDataTimer); _saveDataTimer = null; }
-                    _saveDataImpl();
-                    return;
+                    return _saveDataImpl(); // 返回 Promise，让调用方可等待
                 }
                 // 防抖：延迟 300ms 合并
                 if (_saveDataTimer) clearTimeout(_saveDataTimer);
@@ -8344,6 +8667,7 @@
                     _saveDataTimer = null;
                     _saveDataImpl();
                 }, 300);
+                return Promise.resolve(); // 非立即模式返回已解决的 Promise
             }
             function _saveDataImpl() {
                 // 1) 保存新增的 fileData 到 IDB（只保存还没存过的，避免每次遍历全部消息）
@@ -8386,10 +8710,6 @@
                     myPeerId,
                     plugins
                 };
-                // 3a) 写 IDB meta（异步，不阻塞）
-                idbMetaPut(data).catch(e => {
-                    console.warn('[saveData] IDB meta 写入失败:', e);
-                });
                 // 3b) 同步写 localStorage 冷备份：剥离 fileData 和 sticker base64，确保配额不超限
                 try {
                     const slimSessions = {};
@@ -8412,10 +8732,25 @@
                             return copy;
                         });
                     }
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(slimData));
+                    localStorage.setItem(accountKey(STORAGE_KEY), JSON.stringify(slimData));
                 } catch (e) {
                     console.error('[saveData] localStorage 冷备份失败:', e);
                 }
+                // 4) 同步账号元信息到 accounts 列表
+                try {
+                    let accs = getAccounts();
+                    const idx = accs.list.findIndex(a => a.id === accs.activeId);
+                    if (idx >= 0) {
+                        accs.list[idx].name = myName;
+                        accs.list[idx].peerId = myPeerId;
+                        accs.list[idx].avatar = myAvatar;
+                        saveAccounts(accs);
+                    }
+                } catch (e) {}
+                // 3a) 写 IDB meta（返回 Promise，让调用方可等待完成）
+                return idbMetaPut(data).catch(e => {
+                    console.warn('[saveData] IDB meta 写入失败:', e);
+                });
             }
 
             // 默认头像缓存（按 name 缓存 dataURL，避免每次渲染都创建 canvas）
@@ -9001,6 +9336,7 @@
                 renderProfile();
                 updateRequestBadge();
                 updateSessionBadge();
+                try { renderAccountSelect(); } catch(e) {}
                 if (currentChatId) renderChatMessages(currentChatId);
             }
 
@@ -10285,6 +10621,8 @@
                     showToast('您的浏览器不支持录音');
                     return;
                 }
+                // 防止重复启动
+                if (recordTimerInterval) return;
                 navigator.mediaDevices.getUserMedia({ audio: true })
                     .then(stream => {
                         mediaRecorder = new MediaRecorder(stream);
@@ -10321,6 +10659,8 @@
                         recordBtn.classList.add('recording');
                         recordStatus.textContent = '录音中... 松手发送';
                         recordTimerInterval = setInterval(updateRecordTimer, 200);
+                        // 显示"对方正在说话"提示
+                        if (chatSpeaking) chatSpeaking.style.display = 'flex';
                     })
                     .catch(err => {
                         showToast('无法访问麦克风: ' + err.message);
@@ -10337,8 +10677,11 @@
                 }
                 mediaRecorder.stop();
                 isRecording = false;
-                recordBtn.classList.remove('recording');
+                recordBtn.classList.remove('recording', 'cancel');
                 clearInterval(recordTimerInterval);
+                recordTimerInterval = null;
+                // 隐藏"对方正在说话"提示
+                if (chatSpeaking) chatSpeaking.style.display = 'none';
                 if (cancel) {
                     recordTimer.textContent = '0:00';
                 }
@@ -10348,7 +10691,7 @@
                 mediaRecorder = null;
                 setTimeout(() => {
                     recordStatus.textContent = '按住录音';
-                    recordBtn.classList.remove('recording');
+                    recordBtn.classList.remove('recording', 'cancel');
                     recordTimer.textContent = '0:00';
                     if (!cancel) {
                         closeRecordPanel();
@@ -10357,6 +10700,7 @@
             }
 
             function updateRecordTimer() {
+                if (!recordTimerInterval) return; // 防止已停止时继续更新
                 const elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
                 const mins = Math.floor(elapsed / 60);
                 const secs = elapsed % 60;
@@ -10931,6 +11275,10 @@
                 currentChatId = sessionId;
                 const s = sessions[sessionId];
                 if (!s) return;
+                // 清理上一个会话的 typing 状态
+                if (chatTyping.style.display !== 'none') hideTypingIndicator(currentChatId);
+                // 隐藏"对方正在说话"提示
+                if (chatSpeaking) chatSpeaking.style.display = 'none';
                 chatTitle.textContent = _tf(getSessionDisplayName(sessionId), { source: 'chat_title', sessionId: sessionId });
                 chatStatus.textContent = s.online ? _tf('在线', { source: 'chat_status' }) : _tf('离线', { source: 'chat_status' });
                 chatStatus.className = 'c-status' + (s.online ? '' : ' offline');
@@ -12125,6 +12473,10 @@
             chatInput.addEventListener('input', function() {
                 this.style.height = 'auto';
                 this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+                // 通知对方"正在输入"
+                if (currentChatId && this.value.trim()) {
+                    sendTypingNotice(currentChatId);
+                }
             });
             // 点击/聚焦输入框时自动收起下栏（extend-panel），避免遮挡输入区
             chatInput.addEventListener('focus', function() {
@@ -12367,7 +12719,7 @@
             // 14. PeerJS 连接与消息处理
             // ================================================================
             function initPeer() {
-                const id = myPeerId || ('user-' + Math.random().toString(36).substring(2, 8));
+                const id = myPeerId || generatePeerId();
                 peer = new Peer(id, {
                     debug: 1,
                     config: { 'iceServers': [
@@ -12909,6 +13261,8 @@
 
                     case 'message':
                         const targetId = from;
+                        // 收到消息 → 隐藏"正在输入"提示
+                        hideTypingIndicator(targetId);
                         // 【绝不覆盖】软初始化：如果 sessions 已存在（账号导入新环境/账号重置后重连），
                         // 则保留旧的 messages/unread/_pinned/_lastInfoAt 等全部字段
                         _ensureSessionSoft(targetId, {
@@ -12996,6 +13350,11 @@
                             delete _pongRefreshListeners[from];
                             try { cb(); } catch (e) {}
                         }
+                        break;
+
+                    case 'typing':
+                        // 对方正在输入 → 显示提示（仅当前会话）
+                        showTypingIndicator(from);
                         break;
 
                     case 'profile_cover_request':
@@ -13412,20 +13771,31 @@
                 friendRequests = {};
                 sentRequests = {};
                 chatBackgrounds = {};
-                stickers = [];
-                plugins = [];
+                stickers.length = 0;
+                plugins.length = 0;
                 myName = '旅行者';
                 myAvatar = null;
-                myPeerId = null;
+                myPeerId = generatePeerId(); // 先生成新 ID
                 currentChatId = null;
                 myProfileCover = null;
                 localStorage.removeItem('suchat_profile_cover');
 
-                // 清除 localStorage
-                localStorage.removeItem(STORAGE_KEY);
+                // 更新 accounts 列表：只更新 peerId/name/avatar，保持内部 id 不变
+                {
+                    let accs = getAccounts();
+                    const curId = accs.activeId;
+                    const idx = accs.list.findIndex(a => a.id === curId);
+                    if (idx >= 0) {
+                        accs.list[idx].peerId = myPeerId;
+                        accs.list[idx].name = myName;
+                        accs.list[idx].avatar = null;
+                        saveAccounts(accs);
+                    }
+                }
+
+                // 清除文件数据（已按账号隔离）
                 clearAllFileData();
-                // 清空 IDB stickers 和 meta store（账号重置时一并清理）
-                idbStickerClearAll().catch(() => {});
+                // 清空 IDB meta store（账号重置时一并清理，表情元数据随 meta 清除）
                 idbMetaClear().catch(() => {});
                 // 清空内存层 blobUrl 缓存并释放 ObjectURL（防止重置后旧 blobUrl 仍可访问）
                 if (window._fileBlobs) {
@@ -13453,8 +13823,208 @@
                 setTimeout(() => {
                     initPeer();
                     renderAll();
+                    try { renderAccountSelect(); } catch(e) {}
                 }, 500);
             });
+
+            // ====== 多账号管理 ======
+            const accountSelect = document.getElementById('accountSelect');
+            const profileNewAccountBtn = document.getElementById('profileNewAccountBtn');
+            const profileDeleteAccountBtn = document.getElementById('profileDeleteAccountBtn');
+
+            // 渲染账号选择下拉
+            function renderAccountSelect() {
+                if (!accountSelect) return;
+                const accs = getAccounts();
+                let html = '';
+                for (const a of accs.list) {
+                    const label = a.name + (a.peerId ? ' (' + a.peerId.slice(0, 8) + ')' : '');
+                    html += '<option value="' + a.id + '"' + (a.id === accs.activeId ? ' selected' : '') + '>' + escapeHtml(label) + '</option>';
+                }
+                accountSelect.innerHTML = html;
+            }
+
+            // 切换账号
+            async function switchAccount(targetId) {
+                if (!targetId) return;
+                const accs = getAccounts();
+                if (targetId === accs.activeId) return;
+                // 关键修复：先清掉防抖定时器，防止旧数据在切换后写入新账号
+                if (_saveDataTimer) { clearTimeout(_saveDataTimer); _saveDataTimer = null; }
+                // 保存当前账号数据，并等待 IDB 写入完成
+                await saveData({ immediate: true });
+                // 更新 lastActiveIds：把目标移到最前
+                accs.lastActiveIds = accs.lastActiveIds.filter(id => id !== targetId);
+                accs.lastActiveIds.unshift(accs.activeId);
+                accs.activeId = targetId;
+                saveAccounts(accs);
+                // 关闭所有连接
+                for (let id in connections) { try { connections[id].close(); } catch (e) {} }
+                connections = {};
+                if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+                // 重置内存状态
+                sessions = {}; friends = []; friendRequests = {}; sentRequests = {};
+                chatBackgrounds = {}; stickers.length = 0; plugins.length = 0; currentChatId = null;
+                if (window._fileBlobs) { for (const k in window._fileBlobs) { try { URL.revokeObjectURL(window._fileBlobs[k]); } catch(e){} } window._fileBlobs = {}; }
+                // 加载目标账号数据
+                loadData();
+                loadDataFromIDB(() => {
+                    try { PluginManager.initAll(); } catch (e) {}
+                    if (!myAvatar) myAvatar = getDefaultAvatar(myName);
+                    chatOverlay.classList.remove('active');
+                    settingsMenu.classList.remove('active');
+                    searchBar.classList.remove('active');
+                    renderAll();
+                    renderAccountSelect();
+                    initPeer();
+                    try { updateStorageUsage(); } catch(e){}
+                });
+                showToast('已切换到 ' + (accs.list.find(a=>a.id===targetId)||{}).name);
+            }
+
+            // 新建账号
+            async function createNewAccount() {
+                let accs = getAccounts();
+                if (accs.list.length >= MAX_ACCOUNTS) {
+                    await showConfirm({ title: '账号已达到上限', message: '最多只能创建 ' + MAX_ACCOUNTS + ' 个账号，请先删除不需要的账号。', confirmText: '知道了' });
+                    return;
+                }
+                // 先清掉防抖定时器
+                if (_saveDataTimer) { clearTimeout(_saveDataTimer); _saveDataTimer = null; }
+                const ok = await showConfirm({
+                    title: '新建账号',
+                    message: '将创建一个全新的空账号（新ID、默认昵称），当前账号数据不会丢失。\n\n确定继续？',
+                    confirmText: '新建',
+                    danger: false
+                });
+                if (!ok) return;
+                // 保存当前数据，并等待 IDB 写入完成
+                await saveData({ immediate: true });
+                // 生成新账号（内部ID与peerId解耦）
+                const newPeerId = generatePeerId();
+                const newAccId = generateAccountId();
+                const newAcc = { id: newAccId, name: '旅行者', peerId: newPeerId, avatar: null, createdAt: Date.now() };
+                // 更新 lastActiveIds
+                accs.lastActiveIds = accs.lastActiveIds.filter(id => id !== accs.activeId);
+                accs.lastActiveIds.unshift(accs.activeId);
+                accs.list.push(newAcc);
+                accs.activeId = newAccId;
+                saveAccounts(accs);
+                // 关闭连接
+                for (let id in connections) { try { connections[id].close(); } catch (e) {} }
+                connections = {};
+                if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+                // 重置内存状态为新账号
+                sessions = {}; friends = []; friendRequests = {}; sentRequests = {};
+                chatBackgrounds = {}; stickers.length = 0; plugins.length = 0; currentChatId = null;
+                myName = '旅行者'; myAvatar = null; myPeerId = newPeerId; myProfileCover = null;
+                if (window._fileBlobs) { for (const k in window._fileBlobs) { try { URL.revokeObjectURL(window._fileBlobs[k]); } catch(e){} } window._fileBlobs = {}; }
+                // 保存新账号空数据，并等待 IDB 写入完成
+                await saveData({ immediate: true });
+                // UI
+                chatOverlay.classList.remove('active');
+                settingsMenu.classList.remove('active');
+                searchBar.classList.remove('active');
+                renderAll();
+                renderAccountSelect();
+                initPeer();
+                try { updateStorageUsage(); } catch(e){}
+                showToast('✅ 新账号已创建');
+            }
+
+            // 删除账号
+            async function deleteAccount() {
+                let accs = getAccounts();
+                if (accs.list.length <= 1) {
+                    await showConfirm({ title: '无法删除', message: '至少需要保留一个账号。', confirmText: '知道了' });
+                    return;
+                }
+                // 先清掉防抖定时器
+                if (_saveDataTimer) { clearTimeout(_saveDataTimer); _saveDataTimer = null; }
+                const currentAcc = accs.list.find(a => a.id === accs.activeId);
+                const ok = await showConfirm({
+                    title: '删除账号',
+                    message: '确定要删除账号「' + (currentAcc ? currentAcc.name : '') + '」吗？\n\n• 该账号的聊天记录、好友、表情包、文件等将被永久删除\n• 操作不可撤销\n\n请确认继续。',
+                    confirmText: '删除',
+                    danger: true
+                });
+                if (!ok) return;
+                // 通知好友
+                const resetMsg = { type: 'account_reset', from: myPeerId };
+                for (let id in connections) { try { secureSend(id, resetMsg, true); } catch(e){} }
+                // 关闭连接
+                for (let id in connections) { try { connections[id].close(); } catch (e) {} }
+                connections = {};
+                if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+                // 清除当前账号的 IDB meta + 文件数据
+                const oldMetaKey = accountKey(IDB_META_KEY);
+                idbMetaClear(oldMetaKey).catch(() => {});
+                // 清除当前账号在 IDB files store 中的文件
+                const accSuffix = '__' + accs.activeId;
+                try {
+                    const db = await idbOpen();
+                    const tx = db.transaction(IDB_STORE, 'readwrite');
+                    const store = tx.objectStore(IDB_STORE);
+                    const req = store.openCursor();
+                    req.onsuccess = (e) => {
+                        const cursor = e.target.result;
+                        if (cursor) {
+                            if (typeof cursor.key === 'string' && cursor.key.endsWith(accSuffix)) {
+                                cursor.delete();
+                            }
+                            cursor.continue();
+                        }
+                    };
+                } catch(e) { console.warn('[deleteAccount] IDB files clear failed:', e); }
+                // 清除 localStorage 中当前账号的 key
+                try {
+                    const keysToRemove = [];
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        if (k && k.includes(accPrefix)) keysToRemove.push(k);
+                    }
+                    keysToRemove.forEach(k => localStorage.removeItem(k));
+                } catch(e) {}
+                // 从账号列表移除
+                accs.list = accs.list.filter(a => a.id !== accs.activeId);
+                // 切换到最近使用的账号
+                const nextId = accs.lastActiveIds.find(id => accs.list.some(a => a.id === id)) || accs.list[0].id;
+                accs.lastActiveIds = accs.lastActiveIds.filter(id => id !== accs.activeId && id !== nextId);
+                accs.activeId = nextId;
+                saveAccounts(accs);
+                // 重置内存并加载目标账号
+                sessions = {}; friends = []; friendRequests = {}; sentRequests = {};
+                chatBackgrounds = {}; stickers.length = 0; plugins.length = 0; currentChatId = null;
+                myName = '旅行者'; myAvatar = null; myPeerId = null; myProfileCover = null;
+                if (window._fileBlobs) { for (const k in window._fileBlobs) { try { URL.revokeObjectURL(window._fileBlobs[k]); } catch(e){} } window._fileBlobs = {}; }
+                localStorage.removeItem('suchat_profile_cover');
+                loadData();
+                loadDataFromIDB(() => {
+                    try { PluginManager.initAll(); } catch(e){}
+                    if (!myAvatar) myAvatar = getDefaultAvatar(myName);
+                    chatOverlay.classList.remove('active');
+                    settingsMenu.classList.remove('active');
+                    searchBar.classList.remove('active');
+                    renderAll();
+                    renderAccountSelect();
+                    initPeer();
+                    try { updateStorageUsage(); } catch(e){}
+                });
+                showToast('账号已删除，已切换到 ' + (accs.list.find(a=>a.id===nextId)||{}).name);
+            }
+
+            // 绑定事件
+            if (accountSelect) {
+                accountSelect.addEventListener('change', function() {
+                    switchAccount(this.value);
+                });
+            }
+            if (profileNewAccountBtn) {
+                profileNewAccountBtn.addEventListener('click', createNewAccount);
+            }
+            if (profileDeleteAccountBtn) {
+                profileDeleteAccountBtn.addEventListener('click', deleteAccount);
+            }
 
             // ====== 账号导出 ======
             const profileExportBtn = document.getElementById('profileExportBtn');
@@ -13537,11 +14107,17 @@
                     profileImportInput.value = '';
                     if (!f) return;
                     (async function () {
+                        // 多账号模式：导入账号 = 添加为新账号
+                        let accs = getAccounts();
+                        if (accs.list.length >= MAX_ACCOUNTS) {
+                            await showConfirm({ title: '账号已达到上限', message: '最多只能创建 ' + MAX_ACCOUNTS + ' 个账号，请先删除不需要的账号。', confirmText: '知道了' });
+                            return;
+                        }
                         const ok = await showConfirm({
                             title: '导入账号',
-                            message: '确定导入此账号备份吗？\n\n• 当前账号数据（聊天记录、好友、表情包、ID、昵称…）将被备份覆盖\n• 操作不可撤销\n\n请确认继续。',
-                            confirmText: '覆盖导入',
-                            danger: true
+                            message: '确定导入此账号备份吗？\n\n• 将作为新账号添加到账号列表\n• 当前账号数据不会丢失\n\n请确认继续。',
+                            confirmText: '导入',
+                            danger: false
                         });
                         if (!ok) return;
                         try {
@@ -13561,7 +14137,32 @@
                                 throw new Error('文件不是合法的 SuChat 账号备份');
                             }
                             const meta = pkg.meta || {};
-                            // 覆盖主数据
+                            // 多账号：先保存当前账号，并等待 IDB 写入完成，再切换到新账号
+                            await saveData({ immediate: true });
+                            // 导入账号：生成唯一内部 ID，peerId 用原备份中的值
+                            const importAccId = generateAccountId();
+                            const importPeerId = meta.myPeerId || generatePeerId();
+                            accs = getAccounts();
+                            accs.lastActiveIds = accs.lastActiveIds.filter(id => id !== accs.activeId && id !== importAccId);
+                            accs.lastActiveIds.unshift(accs.activeId);
+                            accs.list.push({
+                                id: importAccId,
+                                name: meta.myName || '旅行者',
+                                peerId: importPeerId,
+                                avatar: meta.myAvatar || null,
+                                createdAt: Date.now()
+                            });
+                            accs.activeId = importAccId;
+                            saveAccounts(accs);
+                            // 关闭连接
+                            for (let id in connections) { try { connections[id].close(); } catch(e){} }
+                            connections = {};
+                            if (peer) { try { peer.destroy(); } catch(e){} peer = null; }
+                            // 重置内存状态
+                            sessions = {}; friends = []; friendRequests = {}; sentRequests = {};
+                            chatBackgrounds = {}; stickers.length = 0; plugins.length = 0; currentChatId = null;
+                            if (window._fileBlobs) { for (const k in window._fileBlobs) { try { URL.revokeObjectURL(window._fileBlobs[k]); } catch(e){} } window._fileBlobs = {}; }
+                            // 覆盖主数据（此时 accountKey 会用 newAccId）
                             if (meta.sessions) sessions = meta.sessions;
                             if (Array.isArray(meta.friends)) friends = meta.friends;
                             if (meta.friendRequests) friendRequests = meta.friendRequests;
@@ -13624,7 +14225,7 @@
                             currentChatId = null;
                             setTimeout(() => {
                                 try { initPeer(); } catch(e) {}
-                                try { renderAll(); } catch(e) {}
+                                try { renderAll(); renderAccountSelect(); } catch(e) {}
                             }, 400);
                             showToast('✅ 账号导入成功');
                         } catch (err) {
@@ -13763,12 +14364,13 @@
             // ================================================================
             // 17. 初始化
             // ================================================================
+            initAccounts();
             loadData();
             // 加载后初始化所有已启用插件（此时 localStorage 里的 plugins 已在内存中就位）
             try { PluginManager.initAll(); } catch (e) { console.warn('[PluginManager.initAll]', e); }
             if (!myAvatar) myAvatar = getDefaultAvatar(myName);
             if (!myPeerId) {
-                myPeerId = 'user-' + Math.random().toString(36).substring(2, 8);
+                myPeerId = generatePeerId();
                 saveData();
             }
 
@@ -14055,6 +14657,37 @@
             //   - 新连接 connect.open → handleNewConnection 时调用 _connRefreshListeners[peerId] 标记在线
             const _pongRefreshListeners = Object.create(null);
             const _connRefreshListeners = Object.create(null);
+
+            // ===== "正在输入" 状态管理 =====
+            const _typingTimers = Object.create(null);  // { peerId: timeoutId }
+            const TYPING_SHOW_MS = 4000;  // 收到 typing 后显示 4 秒
+
+            function showTypingIndicator(peerId) {
+                if (currentChatId !== peerId) return;
+                chatTyping.style.display = 'flex';
+                chatStatus.style.display = 'none';
+                clearTimeout(_typingTimers[peerId]);
+                _typingTimers[peerId] = setTimeout(() => {
+                    hideTypingIndicator(peerId);
+                }, TYPING_SHOW_MS);
+            }
+            function hideTypingIndicator(peerId) {
+                if (_typingTimers[peerId]) {
+                    clearTimeout(_typingTimers[peerId]);
+                    delete _typingTimers[peerId];
+                }
+                chatTyping.style.display = 'none';
+                chatStatus.style.display = '';
+            }
+            // 本地输入时通知对方
+            let _lastTypingSent = 0;
+            function sendTypingNotice(peerId) {
+                if (!peerId || !connections[peerId] || !connections[peerId].open) return;
+                const now = Date.now();
+                if (now - _lastTypingSent < 1500) return; // 节流：1.5s 内只发一次
+                _lastTypingSent = now;
+                try { secureSend(peerId, { type: 'typing', time: now }, true); } catch (e) {}
+            }
 
             // 刷新在线状态（手动下拉触发）：遍历所有会话，检测在线状态
             //   1) 已有连接 & open → 立即发送 ping(ignoreCrypto)，600ms 内收 pong → 在线
