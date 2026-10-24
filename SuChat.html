@@ -980,6 +980,22 @@
             flex-shrink: 0;
             white-space: nowrap;
         }
+        #pageProfile .pf-dice-btn {
+            width: 38px;
+            height: 38px;
+            flex-shrink: 0;
+            border-radius: 10px;
+            border: 1px solid var(--c-border-soft);
+            background: var(--c-bg-input);
+            color: var(--c-text);
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.2s, transform 0.1s;
+        }
+        #pageProfile .pf-dice-btn:hover { background: var(--c-border-soft); }
+        #pageProfile .pf-dice-btn:active { transform: scale(0.92) rotate(12deg); }
         #pageProfile .pf-section-title {
             text-align: center;
             color: var(--c-text-3);
@@ -5690,7 +5706,7 @@
                 <div class="user-info" id="profileTrigger">
                     <div class="avatar" id="homeAvatar"><img src="data:image/png;base64,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"></div>
                     <div>
-                        <div class="name" id="homeName">旅行者</div>
+                        <div class="name" id="homeName">Su用户</div>
                         <div class="id" id="homeId">user-syw081</div>
                     </div>
                 </div>
@@ -5743,6 +5759,7 @@
                 <input type="file" id="avatarFileInput" accept="image/*" style="display:none;">
                 <div class="pf-row-right">
                     <input type="text" id="profileNameInput" placeholder="昵称" class="pf-name-input">
+                    <button class="pf-dice-btn" id="profileDiceBtn" title="随机生成昵称">🎲</button>
                     <button class="pf-save-btn" id="profileSaveBtn">保存</button>
                 </div>
             </div>
@@ -6197,7 +6214,7 @@
                         accs = {
                             list: [{
                                 id: internalId,
-                                name: parsed.myName || '旅行者',
+                                name: parsed.myName || 'Su用户',
                                 peerId: parsed.myPeerId || generatePeerId(),
                                 avatar: parsed.myAvatar || null,
                                 createdAt: Date.now()
@@ -6260,7 +6277,7 @@
                             const data = JSON.parse(raw);
                             accounts.push({
                                 id: id,
-                                name: data.myName || '旅行者',
+                                name: data.myName || 'Su用户',
                                 peerId: data.myPeerId || generatePeerId(),
                                 avatar: data.myAvatar || null,
                                 createdAt: data.myCreatedAt || Date.now()
@@ -6280,7 +6297,7 @@
             };
             const RECALL_LIMIT = 120000; // 2分钟内可撤回
 
-            let myName = '旅行者';
+            let myName = 'Su用户';
             let myPeerId = null;
             let myAvatar = null;
             let myCreatedAt = Date.now();
@@ -6383,6 +6400,7 @@
             const profileAvatarImg = document.getElementById('profileAvatarImg');
             const avatarFileInput = document.getElementById('avatarFileInput');
             const profileSaveBtn = document.getElementById('profileSaveBtn');
+            const profileDiceBtn = document.getElementById('profileDiceBtn');
 
             const cropModal = document.getElementById('cropModal');
             const cropImage = document.getElementById('cropImage');
@@ -6433,7 +6451,7 @@
                         sentRequests = data.sentRequests || {};
                         chatBackgrounds = data.chatBackgrounds || {};
                         stickers = data.stickers || [];
-                        myName = data.myName || '旅行者';
+                        myName = data.myName || 'Su用户';
                         myAvatar = data.myAvatar || null;
                         myPeerId = data.myPeerId || null;
                         myCreatedAt = data.myCreatedAt || Date.now();
@@ -6495,7 +6513,7 @@
                             ? (idbData.stickers.length > 0 ? idbData.stickers : stickers)
                             : stickers;
                         if (idbData.myName) myName = idbData.myName;
-                        else if (!myName) myName = '旅行者';
+                        else if (!myName) myName = 'Su用户';
                         if (idbData.myAvatar) myAvatar = idbData.myAvatar;
                         if (idbData.myPeerId) myPeerId = idbData.myPeerId;
                         if (Array.isArray(idbData.plugins)) _replaceArrayInPlace(plugins, idbData.plugins);
@@ -7178,7 +7196,7 @@
                             // 重置内存并加载目标账号
                             sessions = {}; friends = []; friendRequests = {}; sentRequests = {};
                             chatBackgrounds = {}; stickers.length = 0; plugins.length = 0; currentChatId = null;
-                            myName = '旅行者'; myAvatar = null; myPeerId = null; myProfileCover = null;
+                            myName = 'Su用户'; myAvatar = null; myPeerId = null; myProfileCover = null;
                             if (window._fileBlobs) { for (const k in window._fileBlobs) { try { URL.revokeObjectURL(window._fileBlobs[k]); } catch(e){} } window._fileBlobs = {}; }
                             localStorage.removeItem('suchat_profile_cover');
                             loadData();
@@ -9620,7 +9638,7 @@
                         const qTime = q.time ? new Date(q.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                         const qText = getQuotePreviewText(q);
                         // 引用人名动态查询：优先用 peerId 查当前会话的最新名字
-                        let qName = q.name || '旅行者';
+                        let qName = q.name || 'Su用户';
                         if (q.peerId) {
                             // 自己引用自己
                             if (q.peerId === myPeerId) qName = myName;
@@ -12448,7 +12466,7 @@
                 currentQuote = {
                     time: msg.time,
                     peerId: msg.peerId,
-                    name: msg.name || '旅行者',
+                    name: msg.name || 'Su用户',
                     text: msg.text || '',
                     fileType: msg.file ? (msg.file.type || '') : '',
                     fileName: msg.file ? (msg.file.name || '') : '',
@@ -13828,8 +13846,64 @@
                 cropCallback = null;
             });
 
+            // ====== 随机昵称生成（🎲 骰子） ======
+            const _NAME_ADJ = [
+                '明朗', '温柔', '澄澈', '湛蓝', '素白', '绯红', '翠绿', '金黄', '幽紫', '玄黑',
+                '轻盈', '灵动', '深邃', '辽阔', '静谧', '喧闹', '炽热', '清冷', '湿润', '干燥',
+                '迅捷', '沉稳', '活泼', '安静', '热烈', '冷静', '果敢', '细腻', '粗犷', '甜美',
+                '辛辣', '微酸', '苦涩', '醇厚', '清新', '馥郁', '淡雅', '华丽', '质朴', '勇敢',
+                '聪慧', '神秘', '古老', '崭新', '遥远', '高远', '通透', '皎洁', '灿烂', '温润',
+                '锋利', '圆润', '方正', '柔软', '坚硬', '明亮', '素净', '悠远', '纯真', '俏皮',
+                '浩瀚', '苍翠', '蔚蓝', '朦胧', '璀璨', '娴静', '淡泊', '缱绻', '恣意', '凛冽',
+                '苍茫', '空灵', '缥缈', '婉约', '豪迈', '憨厚', '灵秀', '冷艳', '羞涩', '温婉'
+            ];
+            const _NAME_NOUN = [
+                '星辰', '月亮', '太阳', '银河', '云朵', '雨滴', '雪花', '微风', '火焰', '海浪',
+                '森林', '山谷', '河流', '湖泊', '沙漠', '草原', '极光', '陨石', '流星', '灯塔',
+                '猫咪', '狐狸', '白鹤', '鲸鱼', '海豚', '蝴蝶', '蜻蜓', '萤火', '蜜蜂', '麻雀',
+                '松树', '银杏', '桂花', '蔷薇', '鸢尾', '竹叶', '青苔', '莲藕', '麦穗', '稻香',
+                '贝壳', '珍珠', '珊瑚', '琥珀', '玉石', '琉璃', '陶罐', '书卷', '画卷', '琴弦',
+                '剑影', '棋局', '茶盏', '风铃', '气球', '纸鸢', '笛声', '白鹿', '锦鲤', '柿子',
+                '苍鹰', '羚羊', '山茶', '梧桐', '竹筏', '青瓦', '石桥', '灯笼', '陶笛', '琵琶',
+                '涟漪', '篝火', '雪原', '戈壁', '游隼', '斑鸠', '竹笋', '稻穗', '芦苇', '荷塘'
+            ];
+            let _lastRandName = '';
+            // 从数组中随机取一个下标；excludeIndex 存在时避免与它重复
+            function _pickNameIndex(arr, excludeIndex) {
+                let i = Math.floor(Math.random() * arr.length);
+                if (excludeIndex !== undefined && i === excludeIndex) i = (i + 1) % arr.length;
+                return i;
+            }
+            // 四种随机方式：0=形容词+名词  1=名词  2=名词+名词  3=形容词+名词+名词
+            function randomNickname() {
+                const method = Math.floor(Math.random() * 4);
+                let name = '';
+                for (let attempt = 0; attempt < 6; attempt++) {
+                    // 50% 概率在形容词后加"的"（仅方法0和方法3使用）
+                    const de = Math.random() < 0.5 ? '的' : '';
+                    if (method === 0) {
+                        name = _NAME_ADJ[_pickNameIndex(_NAME_ADJ)] + de + _NAME_NOUN[_pickNameIndex(_NAME_NOUN)];
+                    } else if (method === 1) {
+                        name = _NAME_NOUN[_pickNameIndex(_NAME_NOUN)];
+                    } else if (method === 2) {
+                        const i1 = _pickNameIndex(_NAME_NOUN);
+                        name = _NAME_NOUN[i1] + _NAME_NOUN[_pickNameIndex(_NAME_NOUN, i1)];
+                    } else {
+                        const i1 = _pickNameIndex(_NAME_NOUN);
+                        name = _NAME_ADJ[_pickNameIndex(_NAME_ADJ)] + de + _NAME_NOUN[i1] + _NAME_NOUN[_pickNameIndex(_NAME_NOUN, i1)];
+                    }
+                    if (name !== _lastRandName) break;
+                }
+                _lastRandName = name;
+                return name;
+            }
+            profileDiceBtn.addEventListener('click', function() {
+                profileNameInput.value = randomNickname();
+                showToast('🎲 已随机生成昵称，点保存生效');
+            });
+
             profileSaveBtn.addEventListener('click', function() {
-                const newName = profileNameInput.value.trim() || '旅行者';
+                const newName = profileNameInput.value.trim() || 'Su用户';
                 if (newName !== myName) {
                     const oldName = myName;
                     myName = newName;
@@ -13875,7 +13949,7 @@
             profileResetBtn.addEventListener('click', async function() {
                 const okReset = await showConfirm({
                     title: '重置账号',
-                    message: '确定要重置账号吗？这将：\n\n• 生成新的随机ID\n• 还原默认昵称（旅行者）\n• 清除自定义头像\n• 删除所有聊天记录和会话\n• 删除所有好友和请求记录\n• 删除所有自定义表情包\n\n此操作不可撤销！',
+                    message: '确定要重置账号吗？这将：\n\n• 生成新的随机ID\n• 还原默认昵称（Su用户）\n• 清除自定义头像\n• 删除所有聊天记录和会话\n• 删除所有好友和请求记录\n• 删除所有自定义表情包\n\n此操作不可撤销！',
                     confirmText: '重置',
                     danger: true
                 });
@@ -13906,7 +13980,7 @@
                 chatBackgrounds = {};
                 stickers.length = 0;
                 plugins.length = 0;
-                myName = '旅行者';
+                myName = 'Su用户';
                 myAvatar = null;
                 myPeerId = generatePeerId(); // 先生成新 ID
                 currentChatId = null;
@@ -14036,7 +14110,7 @@
                 // 生成新账号（内部ID与peerId解耦）
                 const newPeerId = generatePeerId();
                 const newAccId = generateAccountId();
-                const newAcc = { id: newAccId, name: '旅行者', peerId: newPeerId, avatar: null, createdAt: Date.now() };
+                const newAcc = { id: newAccId, name: 'Su用户', peerId: newPeerId, avatar: null, createdAt: Date.now() };
                 // 更新 lastActiveIds
                 accs.lastActiveIds = accs.lastActiveIds.filter(id => id !== accs.activeId);
                 accs.lastActiveIds.unshift(accs.activeId);
@@ -14050,7 +14124,7 @@
                 // 重置内存状态为新账号
                 sessions = {}; friends = []; friendRequests = {}; sentRequests = {};
                 chatBackgrounds = {}; stickers.length = 0; plugins.length = 0; currentChatId = null;
-                myName = '旅行者'; myAvatar = null; myPeerId = newPeerId; myCreatedAt = Date.now(); myProfileCover = null;
+                myName = 'Su用户'; myAvatar = null; myPeerId = newPeerId; myCreatedAt = Date.now(); myProfileCover = null;
                 if (window._fileBlobs) { for (const k in window._fileBlobs) { try { URL.revokeObjectURL(window._fileBlobs[k]); } catch(e){} } window._fileBlobs = {}; }
                 // 保存新账号空数据，并等待 IDB 写入完成
                 await saveData({ immediate: true });
@@ -14128,7 +14202,7 @@
                 // 重置内存并加载目标账号
                 sessions = {}; friends = []; friendRequests = {}; sentRequests = {};
                 chatBackgrounds = {}; stickers.length = 0; plugins.length = 0; currentChatId = null;
-                myName = '旅行者'; myAvatar = null; myPeerId = null; myProfileCover = null;
+                myName = 'Su用户'; myAvatar = null; myPeerId = null; myProfileCover = null;
                 if (window._fileBlobs) { for (const k in window._fileBlobs) { try { URL.revokeObjectURL(window._fileBlobs[k]); } catch(e){} } window._fileBlobs = {}; }
                 localStorage.removeItem('suchat_profile_cover');
                 loadData();
@@ -14280,7 +14354,7 @@
                             accs.lastActiveIds.unshift(accs.activeId);
                             accs.list.push({
                                 id: importAccId,
-                                name: meta.myName || '旅行者',
+                                name: meta.myName || 'Su用户',
                                 peerId: importPeerId,
                                 avatar: meta.myAvatar || null,
                                 createdAt: Date.now()
@@ -14515,7 +14589,7 @@
                             friendRequests = idbData.friendRequests || {};
                             sentRequests = idbData.sentRequests || {};
                             chatBackgrounds = idbData.chatBackgrounds || {};
-                            myName = idbData.myName || '旅行者';
+                            myName = idbData.myName || 'Su用户';
                             myAvatar = idbData.myAvatar || null;
                             myPeerId = idbData.myPeerId;
                             myCreatedAt = idbData.myCreatedAt || Date.now();
