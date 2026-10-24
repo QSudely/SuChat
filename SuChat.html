@@ -5700,9 +5700,9 @@
             </div>
             <div class="connect-area">
                 <div class="group">
-                    <span class="icon">🔒</span>
-                    <input type="text" id="friendIdInput" placeholder="输入对方ID 加好友">
-                    <button id="sendFriendRequestBtn">发送请求</button>
+                    <span class="icon">🔍</span>
+                    <input type="text" id="friendSearchInput" placeholder="输入要搜索的目标好友的ID/昵称/备注">
+                    <button id="friendSearchBtn">搜索</button>
                 </div>
             </div>
             <div class="session-list" id="sessionList">
@@ -6329,8 +6329,9 @@
             const homeAvatar = document.getElementById('homeAvatar');
             const profileTrigger = document.getElementById('profileTrigger');
             const addFriendBtn = document.getElementById('addFriendBtn');
-            const friendIdInput = document.getElementById('friendIdInput');
-            const sendFriendRequestBtn = document.getElementById('sendFriendRequestBtn');
+            const friendSearchInput = document.getElementById('friendSearchInput');
+            const friendSearchBtn = document.getElementById('friendSearchBtn');
+            let sessionSearchKeyword = '';
 
             const chatOverlay = document.getElementById('chatOverlay');
             const chatBackBtn = document.getElementById('chatBackBtn');
@@ -9255,19 +9256,30 @@
             }
 
             function renderSessions() {
+                const kw = sessionSearchKeyword.toLowerCase();
                 const keys = Object.keys(sessions).filter(id => {
-                    // 仅展示：好友 / 已有消息记录的会话 / 自己发过消息但 pending 的请求
                     const s = sessions[id];
                     if (!s) return false;
                     // 被删除的联系人（_notFriend=true）不显示
                     if (s._notFriend) return false;
+                    // 好友搜索：先按 ID / 昵称 / 备注 匹配（不区分大小写），不匹配的直接排除
+                    if (kw) {
+                        const sName = (s.name || '');
+                        const sRemark = (s.remark || '');
+                        if (id.toLowerCase().indexOf(kw) < 0 &&
+                            sName.toLowerCase().indexOf(kw) < 0 &&
+                            sRemark.toLowerCase().indexOf(kw) < 0) {
+                            return false;
+                        }
+                    }
+                    // 仅展示：好友 / 已有消息记录的会话 / 自己发过消息但 pending 的请求
                     if (friends.includes(id)) return true;
                     if (Array.isArray(s.messages) && s.messages.length > 0) return true;
                     if (sentRequests[id] && sentRequests[id].status === 'accepted') return true;
                     return false;
                 });
                 if (keys.length === 0) {
-                    sessionList.innerHTML = '<div class="empty-state">' + _tf('暂无会话', { source: 'empty_state' }) + '</div>';
+                    sessionList.innerHTML = '<div class="empty-state">' + _tf(sessionSearchKeyword ? '未找到匹配的好友' : '暂无会话', { source: 'empty_state' }) + '</div>';
                     return;
                 }
                 let sorted = keys.slice().sort((a, b) => {
@@ -13584,12 +13596,17 @@
             // ================================================================
             // 16. UI事件绑定
             // ================================================================
-            sendFriendRequestBtn.addEventListener('click', () => {
-                const id = friendIdInput.value.trim();
-                if (id) { sendFriendRequest(id);
-                    friendIdInput.value = ''; }
+            // 好友搜索：输入即过滤会话列表（按 ID / 昵称 / 备注 匹配现有好友）
+            friendSearchInput.addEventListener('input', () => {
+                sessionSearchKeyword = friendSearchInput.value.trim();
+                renderSessions();
             });
-            friendIdInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendFriendRequestBtn.click(); });
+            friendSearchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') friendSearchInput.blur(); });
+            friendSearchBtn.addEventListener('click', () => {
+                sessionSearchKeyword = friendSearchInput.value.trim();
+                renderSessions();
+                friendSearchInput.blur();
+            });
 
             // ====== 添加好友内部弹窗 ======
             const modalLayer = document.getElementById('modalLayer');
