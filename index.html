@@ -316,6 +316,31 @@
     flex-wrap: wrap;
   }
 
+  /* ——— Language switch ——— */
+  .lang-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink-1);
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(8px);
+    text-decoration: none;
+    transition: background .3s, color .3s, border-color .3s, transform .15s;
+  }
+  .lang-switch:hover {
+    background: rgba(255,255,255,0.08);
+    color: var(--ink-0);
+    border-color: rgba(96,165,250,0.35);
+  }
+  .lang-switch:active { transform: scale(0.96); }
+  .lang-switch svg { width: 14px; height: 14px; flex-shrink: 0; }
+
   /* ——— About button (top-right) ——— */
   .about-btn {
     display: inline-flex;
@@ -603,6 +628,10 @@
             <span class="chip">WebRTC 直连</span>
             <span class="chip">纯前端 · 零依赖</span>
           </div>
+          <a class="lang-switch" href="index-en.html" hreflang="en" lang="en" title="Switch to English">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            EN
+          </a>
           <a class="about-btn" href="https://github.com/QSudely/SuChat/blob/main/README.md" target="_blank" rel="noopener" aria-label="文档">
             <svg class="ab-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/></svg>文档
           </a>
