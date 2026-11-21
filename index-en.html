@@ -752,10 +752,71 @@
     raf();
   })();
 
-  // APK download: try fetch + Blob first, fall back to native a[download]
+  // APK download: auto-locate the single .apk in the repo root; fall back to a fixed URL
+  // when the API fails, no APK is found, or multiple APKs exist.
   (function () {
     var btn = document.getElementById('dlApkBtn');
     if (!btn) return;
+
+    // Fallback URL (still valid if dynamic lookup fails)
+    var FIXED_APK_URL = 'https://qsudely.github.io/SuChat/H59B0711F__20260818222720.apk';
+    var REPO_API = 'https://api.github.com/repos/QSudely/SuChat/contents/';
+    var apkUrl = btn.getAttribute('href') || FIXED_APK_URL;
+    var filename = btn.getAttribute('download') || 'SuChat.apk';
+    var resolvePromise = null;
+    var resolveError = '';
+
+    function pagesBase() {
+      try {
+        if (/^https?:$/.test(location.protocol)) {
+          var p = location.pathname;
+          if (p.charAt(p.length - 1) !== '/') p = p.replace(/[^/]*$/, '');
+          return location.origin + p;
+        }
+      } catch (e) {}
+      return 'https://qsudely.github.io/SuChat/';
+    }
+
+    function applyApk(name) {
+      apkUrl = pagesBase() + encodeURIComponent(name);
+      btn.setAttribute('href', apkUrl);
+    }
+
+    // Read the repo root listing; switch the download URL only when exactly one .apk exists
+    function resolveApk() {
+      if (resolvePromise) return resolvePromise;
+      resolvePromise = fetch(REPO_API, {
+        headers: { 'Accept': 'application/vnd.github+json' },
+        cache: 'no-store',
+        credentials: 'omit'
+      })
+        .then(function (res) {
+          if (!res.ok) {
+            throw new Error(res.status === 403 ? 'Repo API rate-limited or denied' : 'Repo API HTTP ' + res.status);
+          }
+          return res.json();
+        })
+        .then(function (list) {
+          if (!Array.isArray(list)) throw new Error('Unexpected repo API response');
+          var apks = list.filter(function (it) {
+            return it && it.type === 'file' && /\.apk$/i.test(it.name || '');
+          });
+          if (apks.length === 1) {
+            applyApk(apks[0].name);
+            resolveError = '';
+            return true;
+          }
+          if (!apks.length) throw new Error('No APK file found in the repository');
+          throw new Error('Repository has ' + apks.length + ' APKs, cannot auto-select: ' + apks.map(function (a) { return a.name; }).join(', '));
+        })
+        .catch(function (err) {
+          resolveError = (err && err.name === 'TypeError') ? 'Network error or GitHub API unreachable' : ((err && err.message) || 'Unknown error');
+          resolvePromise = null; // allow a retry on the next click
+          return false;
+        });
+      return resolvePromise;
+    }
+
     function saveBlob(url, filename) {
       try {
         var a = document.createElement('a');
@@ -784,13 +845,8 @@
         setTimeout(function () { t.remove(); }, 400);
       }, 2600);
     }
-    btn.addEventListener('click', function (e) {
-      var url = btn.getAttribute('href');
-      var filename = btn.getAttribute('download') || 'SuChat.apk';
-      e.preventDefault();
-      btn.style.opacity = '0.78';
-      btn.style.pointerEvents = 'none';
-      fetch(url, { method: 'GET', mode: 'cors', credentials: 'omit' })
+    function downloadApk() {
+      fetch(apkUrl, { method: 'GET', mode: 'cors', credentials: 'omit' })
         .then(function (res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.blob();
@@ -802,13 +858,27 @@
         })
         .catch(function () {
           // fetch failed (CORS or missing file): fall back to native a[download]
-          saveBlob(url, filename);
-        })
-        .finally(function () {
-          btn.style.opacity = '';
-          btn.style.pointerEvents = '';
+          saveBlob(apkUrl, filename);
         });
+    }
+
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      btn.style.opacity = '0.78';
+      btn.style.pointerEvents = 'none';
+      // Download directly if already resolved; otherwise look up the repo first
+      var ready = (apkUrl !== FIXED_APK_URL) ? Promise.resolve(true) : resolveApk();
+      ready.then(function (ok) {
+        if (!ok) showToast('Could not auto-locate APK: ' + (resolveError || 'unknown error') + '; using the fixed download address');
+        downloadApk();
+      }).finally(function () {
+        btn.style.opacity = '';
+        btn.style.pointerEvents = '';
+      });
     });
+
+    // Warm up silently after page load so the href already points at the repo APK
+    resolveApk();
   })();
 </script>
 

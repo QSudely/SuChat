@@ -752,10 +752,70 @@
     raf();
   })();
 
-  // APK 下载：优先用 fetch + Blob 强制触发下载，失败回退为原生 a[download]
+  // APK 下载：优先从仓库根目录自动定位唯一 .apk；接口失败 / 无 APK / 多个 APK 时回退固定地址
   (function () {
     var btn = document.getElementById('dlApkBtn');
     if (!btn) return;
+
+    // 兜底地址：动态定位失败时仍可下载（重新打包后如文件名长期稳定可保持此值）
+    var FIXED_APK_URL = 'https://qsudely.github.io/SuChat/H59B0711F__20260818222720.apk';
+    var REPO_API = 'https://api.github.com/repos/QSudely/SuChat/contents/';
+    var apkUrl = btn.getAttribute('href') || FIXED_APK_URL;
+    var filename = btn.getAttribute('download') || 'SuChat.apk';
+    var resolvePromise = null;
+    var resolveError = '';
+
+    function pagesBase() {
+      try {
+        if (/^https?:$/.test(location.protocol)) {
+          var p = location.pathname;
+          if (p.charAt(p.length - 1) !== '/') p = p.replace(/[^/]*$/, '');
+          return location.origin + p;
+        }
+      } catch (e) {}
+      return 'https://qsudely.github.io/SuChat/';
+    }
+
+    function applyApk(name) {
+      apkUrl = pagesBase() + encodeURIComponent(name);
+      btn.setAttribute('href', apkUrl);
+    }
+
+    // 查询仓库根目录：仅有 1 个 .apk 时自动切换下载地址
+    function resolveApk() {
+      if (resolvePromise) return resolvePromise;
+      resolvePromise = fetch(REPO_API, {
+        headers: { 'Accept': 'application/vnd.github+json' },
+        cache: 'no-store',
+        credentials: 'omit'
+      })
+        .then(function (res) {
+          if (!res.ok) {
+            throw new Error(res.status === 403 ? '仓库接口限流或拒绝访问' : '仓库接口 HTTP ' + res.status);
+          }
+          return res.json();
+        })
+        .then(function (list) {
+          if (!Array.isArray(list)) throw new Error('仓库接口返回格式异常');
+          var apks = list.filter(function (it) {
+            return it && it.type === 'file' && /\.apk$/i.test(it.name || '');
+          });
+          if (apks.length === 1) {
+            applyApk(apks[0].name);
+            resolveError = '';
+            return true;
+          }
+          if (!apks.length) throw new Error('仓库中未找到 APK 文件');
+          throw new Error('仓库中有 ' + apks.length + ' 个 APK，无法自动确定：' + apks.map(function (a) { return a.name; }).join('、'));
+        })
+        .catch(function (err) {
+          resolveError = (err && err.name === 'TypeError') ? '网络异常或 GitHub 接口不可达' : ((err && err.message) || '未知错误');
+          resolvePromise = null; // 允许下次点击重试
+          return false;
+        });
+      return resolvePromise;
+    }
+
     function saveBlob(url, filename) {
       try {
         var a = document.createElement('a');
@@ -784,13 +844,8 @@
         setTimeout(function () { t.remove(); }, 400);
       }, 2600);
     }
-    btn.addEventListener('click', function (e) {
-      var url = btn.getAttribute('href');
-      var filename = btn.getAttribute('download') || 'SuChat.apk';
-      e.preventDefault();
-      btn.style.opacity = '0.78';
-      btn.style.pointerEvents = 'none';
-      fetch(url, { method: 'GET', mode: 'cors', credentials: 'omit' })
+    function downloadApk() {
+      fetch(apkUrl, { method: 'GET', mode: 'cors', credentials: 'omit' })
         .then(function (res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.blob();
@@ -802,13 +857,27 @@
         })
         .catch(function () {
           // fetch 失败（CORS 或不存在）：回退为原生 a[download]
-          saveBlob(url, filename);
-        })
-        .finally(function () {
-          btn.style.opacity = '';
-          btn.style.pointerEvents = '';
+          saveBlob(apkUrl, filename);
         });
+    }
+
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      btn.style.opacity = '0.78';
+      btn.style.pointerEvents = 'none';
+      // 已成功定位过就直接下载；否则先查仓库（失败时提示并走固定地址）
+      var ready = (apkUrl !== FIXED_APK_URL) ? Promise.resolve(true) : resolveApk();
+      ready.then(function (ok) {
+        if (!ok) showToast('未能自动定位 APK：' + (resolveError || '未知错误') + '，已使用固定下载地址');
+        downloadApk();
+      }).finally(function () {
+        btn.style.opacity = '';
+        btn.style.pointerEvents = '';
+      });
     });
+
+    // 页面加载后静默预热，提前把 href 指向仓库中的最新 APK
+    resolveApk();
   })();
 </script>
 
