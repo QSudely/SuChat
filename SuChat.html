@@ -4293,7 +4293,7 @@
                     </div>
                     <!-- Tab: 语音 -->
                     <div class="ep-tab-content" data-tab="voice">
-                        <div class="record-panel active" id="recordPanel">
+                        <div class="record-panel" id="recordPanel">
                             <span class="record-status" id="recordStatus">按住录音</span>
                             <button class="record-btn" id="recordBtn">🎤</button>
                             <span class="record-timer" id="recordTimer">0:00</span>
@@ -5283,7 +5283,6 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
             const plusBtn = document.getElementById('plusBtn');
             const extendPanel = document.getElementById('extendPanel');
             const extendOptions = document.getElementById('extendOptions');
-            const recordPanel = document.getElementById('recordPanel');
             const stickerGrid = document.getElementById('stickerGrid');
             const stickerUploadInput = document.getElementById('stickerUploadInput');
             const recordBtn = document.getElementById('recordBtn');
@@ -9340,7 +9339,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 }
                 // 2. 关闭扩展面板（点击不在输入区域时）
                 if (!e.target.closest('.chat-input-area')) {
-                    if (extendPanel.classList.contains('open') && !recordPanel.classList.contains('active')) {
+                    if (extendPanel.classList.contains('open') && !isRecording) {
                         closeExtendPanel();
                     }
                 }
@@ -9569,13 +9568,33 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 if (typeof source === 'string' && /^data:/i.test(source)) {
                     var i = source.indexOf(',');
                     if (i < 0) return Promise.reject(new Error('数据格式无效'));
+                    var meta = source.slice(0, i);
                     var mt = /^data:([^;]+)/.exec(source);
-                    return Promise.resolve({ b64: source.slice(i + 1), mime: (mt && mt[1]) || '' });
+                    var mime = (mt && mt[1]) || '';
+                    if (/;base64/i.test(meta)) {
+                        return Promise.resolve({ b64: source.slice(i + 1), mime: mime });
+                    }
+                    // 非 base64 的 dataURL（percent-encoded/纯文本）：转成 Blob 后统一走 FileReader
+                    try {
+                        var text = source.slice(i + 1);
+                        try { text = decodeURIComponent(text); } catch (ignore) {}
+                        return blobToBase64(new Blob([text], { type: mime || 'text/plain' }));
+                    } catch (e) {
+                        return Promise.reject(new Error('数据格式无效'));
+                    }
                 }
+                // blob: URL（聊天文件/图片/导出/备份）与远程 URL 都先取 Blob，再转 base64
                 return fetch(source).then(function (res) {
                     if (!res.ok) throw new Error('HTTP ' + res.status);
                     return res.blob();
-                }).then(blobToBase64);
+                }).then(function (blob) {
+                    if (!blob || !blob.size) throw new Error('文件数据为空');
+                    return blobToBase64(blob);
+                }).catch(function (e) {
+                    var m = (e && e.message) ? String(e.message) : '';
+                    if (!m) throw new Error('读取文件数据失败');
+                    throw new Error(m.indexOf('读取文件数据失败') === 0 ? m : ('读取文件数据失败：' + m));
+                });
             }
 
             function ensureLegacyWritePermission() {
@@ -9598,7 +9617,68 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 if (/is not a function|not a function|undefined is not an object|has no method|method not found/i.test(msg)) {
                     return '系统接口调用失败（方法未桥接）';
                 }
+                if (/NullPointerException|Attempt to get length of null array|length of null array/i.test(msg)) {
+                    return '系统接口调用失败（传入数据为空）';
+                }
                 return msg;
+            }
+
+            // 归一化 Base64：兼容 dataURL 前缀、空白、URL-safe 变体（-_）、缺失 padding
+            function normalizeBase64(raw) {
+                if (typeof raw !== 'string') return null;
+                var s = raw.trim();
+                if (!s) return null;
+                if (/^data:/i.test(s)) {
+                    var comma = s.indexOf(',');
+                    if (comma < 0) return null;
+                    if (!/;base64/i.test(s.slice(0, comma))) return null;
+                    s = s.slice(comma + 1);
+                }
+                s = s.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+                if (s.length % 4 === 1) return null;
+                while (s.length % 4) s += '=';
+                if (!s || !/^[A-Za-z0-9+/=]+$/.test(s)) return null;
+                return s;
+            }
+
+            // Base64 → 二进制字符串（字符 0-255）。DataOutputStream.writeBytes 会按字节原样写出，
+            // 从而绕开 Native.js 把 Java byte[] 再传回 Java 方法时变成 null 的问题。
+            function decodeBase64ToBinaryString(raw) {
+                var norm = normalizeBase64(raw);
+                if (!norm) throw new Error('文件数据为空或格式不受支持');
+                var bin;
+                try { bin = atob(norm); } catch (e) { throw new Error('文件数据不是有效的 Base64 编码'); }
+                if (!bin || !bin.length) throw new Error('文件数据为空或格式不受支持');
+                return { bin: bin, norm: norm };
+            }
+
+            // 写入输出流：优先 DataOutputStream.writeBytes(String)；不可用时再退到 Base64.decode + byte[]
+            function writeBinaryToOutputStream(out, bin, norm) {
+                var dos = null;
+                try {
+                    var DataOutputStream = plus.android.importClass('java.io.DataOutputStream');
+                    if (typeof DataOutputStream === 'function') {
+                        dos = new DataOutputStream(out);
+                        plus.android.importClass(dos);
+                    }
+                } catch (e) { dos = null; }
+                if (dos && typeof dos.writeBytes === 'function') {
+                    dos.writeBytes(bin);
+                    dos.flush();
+                    dos.close(); // 同时关闭底层输出流
+                    return;
+                }
+                var Base64 = plus.android.importClass('android.util.Base64');
+                if (!Base64 || typeof Base64.decode !== 'function') throw new Error('Base64 接口不可用');
+                var bytes = Base64.decode(norm, 0);
+                if (!bytes) throw new Error('文件数据解码为空');
+                try {
+                    out.write(bytes);
+                    out.flush();
+                    out.close();
+                } catch (e) {
+                    throw new Error('无法写入字节数据（' + normalizeNativeError(e) + '）');
+                }
             }
 
             // Android 10+ 通过 MediaStore 写入公共 Download/SuChat（分区存储下无需存储权限）
@@ -9607,9 +9687,10 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     var stage = '准备数据';
                     try {
                         var version = parseInt((plus.os && plus.os.version) || '0', 10) || 0;
-                        var Base64 = plus.android.importClass('android.util.Base64');
-                        if (!Base64 || typeof Base64.decode !== 'function') throw new Error('Base64 接口不可用');
-                        var bytes = Base64.decode(b64, 0);
+                        // 先解码并校验数据：无效时在创建媒体库记录前就失败，避免留下半成品
+                        stage = '解码文件数据';
+                        var decoded = decodeBase64ToBinaryString(b64);
+                        var bin = decoded.bin, norm = decoded.norm;
 
                         if (version >= 10) {
                             stage = '获取媒体库';
@@ -9646,12 +9727,9 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                                 if (!out) throw new Error('openOutputStream 返回空');
                                 // 返回的流实例同样需要导入，才能调用 write/flush/close
                                 plus.android.importClass(out);
-                                if (typeof out.write !== 'function') throw new Error('输出流未桥接（write 不可用）');
 
                                 stage = '写入文件';
-                                out.write(bytes);
-                                out.flush();
-                                out.close();
+                                writeBinaryToOutputStream(out, bin, norm);
                                 out = null;
 
                                 stage = '发布文件';
@@ -9681,9 +9759,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                                 var dir = new File('/storage/emulated/0/Download/SuChat');
                                 if (!dir.exists()) dir.mkdirs();
                                 var fos = new FileOutputStream(new File(dir, name));
-                                fos.write(bytes);
-                                fos.flush();
-                                fos.close();
+                                writeBinaryToOutputStream(fos, bin, norm);
                                 resolve();
                             } catch (e) {
                                 reject(new Error('写入公共下载目录失败：' + normalizeNativeError(e)));
@@ -11031,7 +11107,8 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 if (settingsMenu.classList.contains('active')) { closeChatSettings(); return; }
                 // 3) 聊天面板内部的层级（录音/搜索/消息菜单/扩展面板 → 最后关闭聊天）
                 if (_chatIsOpen()) {
-                    if (recordPanel.classList.contains('active')) {
+                    // 录音状态以 isRecording 为准，不能用 record-panel 的 class 判断（它是常驻样式类）
+                    if (isRecording) {
                         try { stopRecording(true); showToast('已取消录音'); } catch (e) {}
                         return;
                     }
