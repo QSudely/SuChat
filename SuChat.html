@@ -4210,7 +4210,7 @@
             <!-- 签名小字 -->
             <div class="pf-footer">
                 <div class="pf-footer-line">Made by Sudely</div>
-                <div class="pf-footer-line">P2P Encrypted · 800+KB</div>
+                <div class="pf-footer-line">P2P Encrypted · 900+KB</div>
             </div>
         </div>
 
@@ -7504,7 +7504,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                             permissions: meta.permissions,
                             code: codeStr,
                             enabled: true,
-                            httpGranted: false, // 网络授权与插件 ID 绑定并持久化
+                            httpGranted: false, // 本次启用期间的网络授权；插件关闭时清除，下次开启重新确认
                             installAt: meta.installAt,
                         };
                         // 声明了 http 的插件：安装阶段先确认网络授权
@@ -7590,8 +7590,8 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     console.log('%c[Plugin.toggle]', 'color:#1890ff;font-weight:700;', `id=${pluginId} name=${p.name} wasEnabled=${p.enabled} → shouldEnable=${shouldEnable}`);
                     let changed = false;
                     if (shouldEnable && !p.enabled) {
-                        // 声明了网络能力且尚未授权：开启前确认
-                        if (_needHttpGrant(p) && !p.httpGranted) {
+                        // 网络授权只在“本次启用”内有效：每次从关闭→开启都必须重新确认
+                        if (_needHttpGrant(p)) {
                             const ok = await _confirmHttpAccess(p);
                             if (!ok) {
                                 console.log('%c[Plugin.toggle] 用户拒绝网络授权，保持关闭', 'color:#fa8c16;font-weight:700;', `id=${pluginId}`);
@@ -7602,9 +7602,19 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                             changed = true; // 授权状态已变更，需要持久化
                         }
                         if (_loadPlugin(p)) { p.enabled = true; changed = true; }
-                        else console.warn('[Plugin.toggle] enable failed (exec returned false)');
+                        else {
+                            // 启用失败则插件仍为关闭，本次授权随之作废
+                            if (_needHttpGrant(p)) {
+                                p.httpGranted = false;
+                                _grantedHttp.delete(pluginId);
+                                changed = true;
+                            }
+                            console.warn('[Plugin.toggle] enable failed (exec returned false)');
+                        }
                     } else if (!shouldEnable && p.enabled) {
-                        _unloadPlugin(pluginId);
+                        // 关闭即作废本次启用的网络授权：持久化记录与内存态都要清，下次开启重新确认
+                        if (_needHttpGrant(p)) p.httpGranted = false;
+                        _unloadPlugin(pluginId); // _unloadPlugin 内会清除 _grantedHttp 内存授权
                         p.enabled = false;
                         changed = true;
                         // 禁用后移除对应已渲染的插件扩展页面 DOM，避免残留
