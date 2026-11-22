@@ -6396,7 +6396,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 }
 
                 // 统一解析 + 元数据校验 + 安装：三条入口最终都只走这里，安装仍复用 PluginManager.installPlugin
-                function _piInstallFromText(text, opts) {
+                async function _piInstallFromText(text, opts) {
                     opts = opts || {};
                     const fileName = opts.fileName || 'plugin.jsc';
                     const raw = (typeof text === 'string' ? text : '').replace(/^\uFEFF/, '');
@@ -6414,7 +6414,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     const hasMetaHeader = /@(id|name)\s+\S/.test(header);
                     let meta = null;
                     try { meta = PluginManager._extractMeta(raw, fileName); } catch (e) {}
-                    const record = PluginManager.installPlugin(raw, {
+                    const record = await PluginManager.installPlugin(raw, {
                         forceName: fileName.replace(/\.jsc$/i, ''),
                         showErrorToast: false
                     });
@@ -6444,7 +6444,10 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     }
                     const m = res.meta || {};
                     const metaNote = res.hasMetaHeader ? '' : '（未检测到 @id/@name 元数据头，已自动生成 ID）';
-                    if (!res.execOk) {
+                    if (res.record && res.record.enabled === false) {
+                        _piSetStatus('⚠️ 已安装「' + m.name + '」v' + m.version + ' · ID ' + m.id + '，但未开启（未授予网络权限，可在列表中开启时再确认）', 'warn');
+                        showToast('⚠️ 插件「' + m.name + '」已安装，但未开启');
+                    } else if (!res.execOk) {
                         _piSetStatus('已安装「' + m.name + '」v' + m.version + '，但代码执行失败；可在列表中禁用或修正后重装', 'warn');
                         showToast('⚠️ 插件「' + m.name + '」已安装，但运行失败');
                     } else {
@@ -6467,7 +6470,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                             if (!/\.jsc$/i.test(f.name)) { fail++; reasons.push(f.name + '：仅支持 .jsc 文件'); continue; }
                             let text = '';
                             try { text = await f.text(); } catch (e) { fail++; reasons.push(f.name + '：文件读取失败'); continue; }
-                            const res = _piInstallFromText(text, { fileName: f.name });
+                            const res = await _piInstallFromText(text, { fileName: f.name });
                             if (res.ok) ok++;
                             else { fail++; reasons.push(f.name + '：' + res.reason); }
                         }
@@ -6513,7 +6516,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                         if (_piBusy) return;
                         _piSetBusy(true);
                         try {
-                            const res = _piInstallFromText(piPasteInput.value, { fileName: 'plugin.jsc' });
+                            const res = await _piInstallFromText(piPasteInput.value, { fileName: 'plugin.jsc' });
                             if (_piReportResult(res)) piPasteInput.value = '';
                             await _piRefreshPlugins();
                         } finally {
@@ -6551,7 +6554,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                             if (!resp.ok) throw new Error('HTTP ' + resp.status + '（服务器返回错误）');
                             const text = await resp.text();
                             _piSetStatus('已拉取 ' + text.length + ' 字符，正在解析安装…', 'info');
-                            const res = _piInstallFromText(text, {
+                            const res = await _piInstallFromText(text, {
                                 fileName: (parsed.pathname.split('/').pop() || 'plugin.jsc')
                             });
                             if (_piReportResult(res)) piUrlInput.value = '';
@@ -6603,7 +6606,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                         const uninstallEl = e.target.closest('[data-spcuninstall]');
                         if (toggleEl) {
                             const pid = toggleEl.dataset.spctoggle;
-                            PluginManager.togglePlugin(pid);
+                            await PluginManager.togglePlugin(pid);
                             saveData();
                             await renderFileMgrTab('plugins');
                             return;
@@ -6984,6 +6987,21 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 const _grantedNotify = new Set();
                 const PLUGIN_STORAGE_PREFIX = 'suchat_plug_store:';
 
+                // 插件是否声明了网络能力（仅 http 权限需要网络授权）
+                function _needHttpGrant(p) {
+                    return !!(p && Array.isArray(p.permissions) && p.permissions.includes(PERMS.HTTP));
+                }
+                // 网络授权确认（安装 / 开启 / 兜底调用时统一文案）
+                async function _confirmHttpAccess(p) {
+                    const name = (p && (p.name || p.id)) || '插件';
+                    return !!(await showConfirm({
+                        title: '插件请求网络权限',
+                        message: '插件「' + name + '」请求访问互联网（HTTP 请求）。\n仅在你信任此插件时开启，后续将不再重复询问。',
+                        confirmText: '允许',
+                        cancelText: '拒绝',
+                    }));
+                }
+
                 function _uid(prefix) {
                     return (prefix || 'p') + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
                 }
@@ -7042,6 +7060,8 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     const pid = pluginInfo.id;
                     const perms = pluginInfo.permissions || [];
                     const hasPerm = (p) => perms.includes(p);
+                    // 已持久化授权的插件：加载时同步到内存授权集合，后续 HTTP 调用不再询问
+                    if (hasPerm(PERMS.HTTP) && pluginInfo.httpGranted) _grantedHttp.add(pid);
                     // 创建 API 对象（与插件一一对应，隔离存储命名空间）
                     const api = {
                         info: {
@@ -7186,14 +7206,16 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                             fetch: async (input, init) => {
                                 if (!hasPerm(PERMS.HTTP)) throw new Error('[Plugin] Missing permission: ' + PERMS.HTTP);
                                 if (!_grantedHttp.has(pid)) {
-                                    const ok = await showConfirm({
-                                        title: '插件请求网络权限',
-                                        message: '插件「' + pluginInfo.name + '」请求访问互联网（HTTP 请求）。\n仅在你信任此插件时允许。',
-                                        confirmText: '允许',
-                                        cancelText: '拒绝',
-                                    });
-                                    if (!ok) throw new Error('[Plugin] HTTP permission denied by user');
-                                    _grantedHttp.add(pid);
+                                    // 兜底：老数据中已启用但尚未授权的插件，首次调用时确认并持久化
+                                    if (pluginInfo.httpGranted) {
+                                        _grantedHttp.add(pid);
+                                    } else {
+                                        const ok = await _confirmHttpAccess(pluginInfo);
+                                        if (!ok) throw new Error('[Plugin] HTTP permission denied by user');
+                                        pluginInfo.httpGranted = true;
+                                        _grantedHttp.add(pid);
+                                        try { saveData(); } catch (e) {}
+                                    }
                                 }
                                 return fetch(input, init);
                             },
@@ -7447,10 +7469,11 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 }
 
                 // ===== 对外 API =====
-                function installPlugin(codeStr, opts) {
+                async function installPlugin(codeStr, opts) {
                     try {
                         if (typeof opts === 'string') opts = { fileName: opts };
                         else if (!opts || typeof opts !== 'object') opts = {};
+                        installPlugin._lastExecOk = null;
                         const showErrorToast = opts.showErrorToast !== false;
                         if (typeof codeStr !== 'string' || !codeStr.trim()) {
                             if (showErrorToast) showToast('插件内容为空');
@@ -7481,10 +7504,27 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                             permissions: meta.permissions,
                             code: codeStr,
                             enabled: true,
+                            httpGranted: false, // 网络授权与插件 ID 绑定并持久化
                             installAt: meta.installAt,
                         };
+                        // 声明了 http 的插件：安装阶段先确认网络授权
+                        const needsHttp = _needHttpGrant(record);
+                        let granted = true;
+                        if (needsHttp) granted = await _confirmHttpAccess(record);
+                        record.httpGranted = needsHttp ? granted : false;
                         if (existingIdx >= 0) _pluginsData.splice(existingIdx, 1, record);
                         else _pluginsData.push(record);
+                        if (needsHttp && !granted) {
+                            // 取消授权：仍安装，但保持关闭；重装同 ID 也需重新确认，不继承旧授权
+                            record.enabled = false;
+                            console.log('%c[Plugin.install] 用户拒绝网络授权，插件保持关闭', 'color:#fa8c16;font-weight:700;', `id=${meta.id}`);
+                            saveData();
+                            _refreshToolbarExtensions();
+                            _refreshBottomNavExtensions();
+                            if (showErrorToast) showToast('插件「' + meta.name + '」已安装（未开启）');
+                            return record;
+                        }
+                        if (needsHttp) _grantedHttp.add(record.id);
                         const execOk = _loadPlugin(record);
                         installPlugin._lastExecOk = execOk;
                         if (!execOk) {
@@ -7543,13 +7583,24 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     return true;
                 }
 
-                function togglePlugin(pluginId, enabled) {
+                async function togglePlugin(pluginId, enabled) {
                     const p = _pluginsData.find(x => x.id === pluginId);
                     if (!p) return false;
                     const shouldEnable = (typeof enabled === 'boolean') ? enabled : !p.enabled;
                     console.log('%c[Plugin.toggle]', 'color:#1890ff;font-weight:700;', `id=${pluginId} name=${p.name} wasEnabled=${p.enabled} → shouldEnable=${shouldEnable}`);
                     let changed = false;
                     if (shouldEnable && !p.enabled) {
+                        // 声明了网络能力且尚未授权：开启前确认
+                        if (_needHttpGrant(p) && !p.httpGranted) {
+                            const ok = await _confirmHttpAccess(p);
+                            if (!ok) {
+                                console.log('%c[Plugin.toggle] 用户拒绝网络授权，保持关闭', 'color:#fa8c16;font-weight:700;', `id=${pluginId}`);
+                                return false;
+                            }
+                            p.httpGranted = true;
+                            _grantedHttp.add(pluginId);
+                            changed = true; // 授权状态已变更，需要持久化
+                        }
                         if (_loadPlugin(p)) { p.enabled = true; changed = true; }
                         else console.warn('[Plugin.toggle] enable failed (exec returned false)');
                     } else if (!shouldEnable && p.enabled) {
@@ -13606,14 +13657,17 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                                             }
                                             const codeStr = new TextDecoder('utf-8').decode(bytes);
                                             // 延迟安装：让 UI 先渲染完毕，避免阻塞文件消息展示
-                                            setTimeout(() => {
+                                            setTimeout(async () => {
                                                 try {
-                                                    const record = PluginManager.installPlugin(codeStr, {
+                                                    const record = await PluginManager.installPlugin(codeStr, {
                                                         forceName: fName.replace(/\.jsc$/i, ''),
                                                         showErrorToast: false
                                                     });
                                                     if (record) {
-                                                        showToast('插件已安装：' + (record.meta && record.meta.name || fName));
+                                                        const recName = record.name || fName;
+                                                        showToast(record.enabled === false
+                                                            ? '插件已安装但未开启：' + recName
+                                                            : '插件已安装：' + recName);
                                                         renderSettings && renderSettings();
                                                     }
                                                 } catch (e) {
