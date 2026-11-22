@@ -15,7 +15,24 @@
                 var mode = (saved === 'light' || saved === 'dark' || saved === 'system') ? saved : 'system';
                 var effective = mode;
                 if (mode === 'system') {
-                    effective = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+                    // APK 容器兜底：WebView 的 prefers-color-scheme 可能不跟随系统，优先读原生 uiMode
+                    var nativeDark = null;
+                    try {
+                        var P = window.plus;
+                        if (P && P.android) {
+                            var act = P.android.runtimeMainActivity();
+                            var Conf = P.android.importClass('android.content.res.Configuration');
+                            var uiMode = act.getResources().getConfiguration().uiMode;
+                            if (typeof uiMode === 'number' && !isNaN(uiMode)) {
+                                nativeDark = (uiMode & Conf.UI_MODE_NIGHT_MASK) === Conf.UI_MODE_NIGHT_YES;
+                            }
+                        }
+                    } catch (e) { nativeDark = null; }
+                    if (nativeDark !== null) {
+                        effective = nativeDark ? 'dark' : 'light';
+                    } else {
+                        effective = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+                    }
                 }
                 var html = document.documentElement;
                 html.setAttribute('data-theme', effective);
@@ -4138,7 +4155,8 @@
                 <div class="sm-tab" data-tab="others">其他文件</div>
                 <div class="sm-tab" data-tab="accounts">账号管理</div>
             </div>
-            <div style="display:none;"><input type="file" id="smPluginsFileInput" accept=".jsc" multiple></div>
+            <!-- 不设 accept：与聊天发送文件一致，让系统选择器展示全部来源；.jsc 扩展名在读取后校验 -->
+            <div style="display:none;"><input type="file" id="smPluginsFileInput" multiple></div>
             <div class="sm-body" id="smBody"></div>
             <!-- 仅在插件管理 Tab 显示的右下角“添加插件”浮动按钮（位于 footer 删除按钮上方，独立层级） -->
             <button class="sm-plugins-fab" id="smPluginsAddBtn" title="添加插件（.jsc）">
@@ -4989,16 +5007,35 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
             // 0. 主题切换
             // ================================================================
             const THEME_KEY = 'suchat_theme';
-            const THEME_SYSTEM_MQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+            const THEME_SYSTEM_MQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+            // APK 容器兜底：WebView 的 prefers-color-scheme 可能恒为 light（不跟随系统），
+            // 所以 plus 环境下优先读原生 Configuration.uiMode。读不到/异常返回 null，交由 matchMedia 兜底。
+            function _getSystemDarkFromNative() {
+                try {
+                    const p = window.plus;
+                    if (!p || !p.android) return null;
+                    const act = p.android.runtimeMainActivity();
+                    // Android 13+ 已废弃 getConfiguration 的默认参数用法，这里仍用无参形式兼容旧版本
+                    const config = act.getResources().getConfiguration();
+                    const uiMode = config.uiMode;
+                    if (typeof uiMode !== 'number' || isNaN(uiMode)) return null;
+                    const Configuration = p.android.importClass('android.content.res.Configuration');
+                    return (uiMode & Configuration.UI_MODE_NIGHT_MASK) === Configuration.UI_MODE_NIGHT_YES;
+                } catch (e) {
+                    return null;
+                }
+            }
             function getCurrentTheme() {
                 const t = localStorage.getItem(THEME_KEY);
                 // 老用户保存的 dark/light 保持原样；未保存过（首次使用）默认 system
                 return (t === 'light' || t === 'dark' || t === 'system') ? t : 'system';
             }
-            // 把「系统」解析为实际生效的 dark/light
+            // 把「系统」解析为实际生效的 dark/light（固定主题直接返回，不查原生）
             function resolveTheme(mode) {
                 if (mode === 'light' || mode === 'dark') return mode;
-                return (THEME_SYSTEM_MQ && THEME_SYSTEM_MQ.matches) ? 'light' : 'dark';
+                const nativeDark = _getSystemDarkFromNative();
+                if (nativeDark !== null) return nativeDark ? 'dark' : 'light';
+                return (THEME_SYSTEM_MQ && THEME_SYSTEM_MQ.matches) ? 'dark' : 'light';
             }
             function applyTheme(theme, opts) {
                 const mode = (theme === 'light' || theme === 'dark' || theme === 'system') ? theme : 'system';
@@ -5024,13 +5061,20 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     });
                 }
                 // 选「系统」时，设备深浅色切换 → 界面实时跟随
+                const onSchemeChange = () => {
+                    if (getCurrentTheme() === 'system') applyTheme('system', { _noSave: true });
+                };
                 if (THEME_SYSTEM_MQ) {
-                    const onSchemeChange = () => {
-                        if (getCurrentTheme() === 'system') applyTheme('system', { _noSave: true });
-                    };
                     if (THEME_SYSTEM_MQ.addEventListener) THEME_SYSTEM_MQ.addEventListener('change', onSchemeChange);
                     else if (THEME_SYSTEM_MQ.addListener) THEME_SYSTEM_MQ.addListener(onSchemeChange);
                 }
+                // APK 原生兜底：Native.js 无法稳定注册 ComponentCallbacks，改在回前台/恢复时重查一次
+                // plusready 覆盖「启动时 plus 尚未就绪」；resume / visibilitychange 覆盖「切系统深浅色后回到应用」
+                document.addEventListener('plusready', onSchemeChange, false);
+                document.addEventListener('resume', onSchemeChange, false);
+                document.addEventListener('visibilitychange', function () {
+                    if (!document.hidden) onSchemeChange();
+                }, false);
             }
             setupThemeSwitch();
 
@@ -9546,40 +9590,91 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 });
             }
 
+            // Native.js 错误归一化：避免 "xxx is not a function" 这类开发期错误直接暴露给用户
+            function normalizeNativeError(e) {
+                var msg = (e && e.message) ? String(e.message) : String(e == null ? '' : e);
+                msg = msg.replace(/^Error:\s*/, '').trim();
+                if (!msg || msg === '[object Object]') return '未知错误';
+                if (/is not a function|not a function|undefined is not an object|has no method|method not found/i.test(msg)) {
+                    return '系统接口调用失败（方法未桥接）';
+                }
+                return msg;
+            }
+
             // Android 10+ 通过 MediaStore 写入公共 Download/SuChat（分区存储下无需存储权限）
             function saveBase64ToPublicDownloads(b64, name, mime) {
                 return new Promise(function (resolve, reject) {
+                    var stage = '准备数据';
                     try {
                         var version = parseInt((plus.os && plus.os.version) || '0', 10) || 0;
                         var Base64 = plus.android.importClass('android.util.Base64');
+                        if (!Base64 || typeof Base64.decode !== 'function') throw new Error('Base64 接口不可用');
                         var bytes = Base64.decode(b64, 0);
 
                         if (version >= 10) {
+                            stage = '获取媒体库';
                             var Uri = plus.android.importClass('android.net.Uri');
+                            if (!Uri || typeof Uri.parse !== 'function') throw new Error('Uri.parse 不可用');
                             var ContentValues = plus.android.importClass('android.content.ContentValues');
-                            var resolver = plus.android.runtimeMainActivity().getContentResolver();
-                            var values = new ContentValues();
-                            values.put('_display_name', name);
-                            values.put('mime_type', mime || 'application/octet-stream');
-                            values.put('relative_path', 'Download/SuChat');
-                            values.put('is_pending', 1);
-                            var uri = resolver.insert(Uri.parse('content://media/external/downloads'), values);
-                            if (!uri) throw new Error('媒体库创建文件失败');
-                            var out = resolver.openOutputStream(uri);
-                            if (!out) throw new Error('无法打开写入流');
-                            out.write(bytes);
-                            out.flush();
-                            out.close();
-                            var done = new ContentValues();
-                            done.put('is_pending', 0);
-                            resolver.update(uri, done, null, null);
-                            resolve();
-                            return;
+                            if (typeof ContentValues !== 'function') throw new Error('ContentValues 类不可用');
+                            var activity = plus.android.runtimeMainActivity();
+                            var resolver = (activity && typeof activity.getContentResolver === 'function') ? activity.getContentResolver() : null;
+                            if (!resolver) throw new Error('无法获取 ContentResolver');
+                            // 关键修复：实例必须单独 importClass，否则 insert/openOutputStream/update/delete 不会暴露
+                            plus.android.importClass(resolver);
+                            var missing = ['insert', 'openOutputStream', 'update', 'delete'].filter(function (m) {
+                                return typeof resolver[m] !== 'function';
+                            });
+                            if (missing.length) throw new Error('ContentResolver 未桥接，缺少：' + missing.join('/'));
+
+                            var uri = null, out = null;
+                            try {
+                                // MediaStore 列名用字符串常量：嵌套类静态字段在 Native.js 下跨版本不稳定
+                                stage = '创建媒体库文件';
+                                var values = new ContentValues();
+                                plus.android.importClass(values);
+                                if (typeof values.put !== 'function') throw new Error('ContentValues.put 未桥接');
+                                values.put('_display_name', name);
+                                values.put('mime_type', mime || 'application/octet-stream');
+                                values.put('relative_path', 'Download/SuChat');
+                                values.put('is_pending', 1);
+                                uri = resolver.insert(Uri.parse('content://media/external/downloads'), values);
+                                if (!uri) throw new Error('媒体库 insert 返回空');
+
+                                stage = '打开写入流';
+                                out = resolver.openOutputStream(uri);
+                                if (!out) throw new Error('openOutputStream 返回空');
+                                // 返回的流实例同样需要导入，才能调用 write/flush/close
+                                plus.android.importClass(out);
+                                if (typeof out.write !== 'function') throw new Error('输出流未桥接（write 不可用）');
+
+                                stage = '写入文件';
+                                out.write(bytes);
+                                out.flush();
+                                out.close();
+                                out = null;
+
+                                stage = '发布文件';
+                                var done = new ContentValues();
+                                plus.android.importClass(done);
+                                if (typeof done.put !== 'function') throw new Error('ContentValues.put 未桥接');
+                                done.put('is_pending', 0);
+                                resolver.update(uri, done, null, null);
+                                resolve();
+                                return;
+                            } catch (e) {
+                                // 失败时清理半成品，避免留下 is_pending=1 的隐藏文件
+                                if (out) { try { out.close(); } catch (ignore) {} }
+                                if (uri) { try { resolver.delete(uri, null, null); } catch (ignore) {} }
+                                reject(new Error(stage + '失败：' + normalizeNativeError(e)));
+                                return;
+                            }
                         }
 
                         // Android 9 及以下：直接写入公共目录（需要 WRITE_EXTERNAL_STORAGE 运行时权限）
+                        stage = '写入公共下载目录';
                         ensureLegacyWritePermission().then(function (ok) {
-                            if (!ok) { reject(new Error('未授予存储权限')); return; }
+                            if (!ok) { reject(new Error('写入公共下载目录失败：未授予存储权限')); return; }
                             try {
                                 var File = plus.android.importClass('java.io.File');
                                 var FileOutputStream = plus.android.importClass('java.io.FileOutputStream');
@@ -9590,9 +9685,13 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                                 fos.flush();
                                 fos.close();
                                 resolve();
-                            } catch (e) { reject(e); }
+                            } catch (e) {
+                                reject(new Error('写入公共下载目录失败：' + normalizeNativeError(e)));
+                            }
                         });
-                    } catch (e) { reject(e); }
+                    } catch (e) {
+                        reject(new Error(stage + '失败：' + normalizeNativeError(e)));
+                    }
                 });
             }
 
@@ -9627,7 +9726,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                         return true;
                     })
                     .catch(function (err) {
-                        showToast('❌ 保存失败：' + ((err && err.message) || err));
+                        showToast('❌ 保存失败：' + normalizeNativeError(err));
                         return false;
                     });
             }
@@ -10632,7 +10731,10 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 if (pageId === 'pageSessions') renderSessions();
                 // hash 同步：用户主动切换时 push 一条历史；路由触发的切换（_silent）不回写，避免重复历史
                 _hashApplied = hashForPage(pageId);
-                if (_hashReady && !(opts && opts._silent)) _writeHash(_hashApplied, false);
+                if (_hashReady && !(opts && opts._silent)) {
+                    _stackPush(_hashApplied);
+                    _writeHash(_hashApplied, false);
+                }
             }
 
             navItems.forEach(item => {
@@ -10676,6 +10778,26 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
             const LAST_CHAT_KEY = 'suchat_route_last_chat';
             let _hashReady = false;
             let _hashApplied = '';
+            // 应用内路由栈：供 Android 返回键使用（不依赖 WebView 的 canGoBack/history，
+            // 否则会被 splash → 远程页的历史条目或容器默认“退出应用”逻辑干扰）
+            let _routeStack = [];
+
+            function _stackPush(key) {
+                if (!key) return;
+                if (_routeStack.length && _routeStack[_routeStack.length - 1] === key) return;
+                _routeStack.push(key);
+                if (_routeStack.length > 50) _routeStack.splice(0, _routeStack.length - 50);
+            }
+
+            // 丢弃栈尾的聊天/聊天设置层（关闭聊天或设置时使用）
+            function _stackStripChatLayers() {
+                let guard = 0;
+                while (_routeStack.length && guard++ < 10) {
+                    const top = _routeStack[_routeStack.length - 1];
+                    if (top === 'chat' || top.indexOf('chat/') === 0 || top.indexOf('chat-setting/') === 0) _routeStack.pop();
+                    else break;
+                }
+            }
 
             function hashForPage(pageId) {
                 if (PAGE_ROUTE_MAP[pageId]) return PAGE_ROUTE_MAP[pageId];
@@ -10752,6 +10874,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 if (_chatIsOpen()) closeChat({ _silent: true });
                 switchPage('pageOther', { _silent: true, _fromRoute: true });
                 _renderOtherText(raw || null);
+                if (_hashReady) _stackPush('other');
             }
 
             // 会话不存在时的既有落点：回到会话列表并提示
@@ -10848,6 +10971,109 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 _hashReady = true;
                 window.addEventListener('hashchange', _onHashChange);
                 applyHashRoute();
+                _routeStack = [_hashApplied || 'sessions'];
+            }
+
+            // 返回键直接切到某个页面：URL 用 replace 同步，不再往 WebView 历史里加条目
+            function _gotoRoute(key) {
+                if (!key) { switchPage('pageSessions'); return; }
+                const route = _parseRoute(key);
+                if (route.name === 'unknown') { switchPage('pageSessions'); return; }
+                if (route.name === 'plugin') {
+                    let exists = false;
+                    try {
+                        exists = !!(route.extId && PluginManager.getBottomNavExtensions().some(x => x.id === route.extId));
+                    } catch (e) {}
+                    if (!exists) { switchPage('pageSessions'); return; }
+                }
+                _hashApplied = key;
+                try {
+                    if (history.replaceState) history.replaceState(null, '', '#' + key);
+                    else location.hash = '#' + key;
+                } catch (e) {}
+                if (_chatIsOpen()) closeChat({ _silent: true });
+                if (route.name === 'plugin') {
+                    switchPage('pagePlugins_' + route.extId, { _silent: true, _fromRoute: true });
+                    return;
+                }
+                const pageId = ROUTE_PAGE_MAP[route.name];
+                if (!pageId) { switchPage('pageSessions'); return; }
+                switchPage(pageId, { _silent: true, _fromRoute: true });
+                if (pageId === 'pageStorageMgr') {
+                    try { renderFileMgrTab('sessions').catch(err => console.warn('[hash route] renderFileMgrTab:', err)); } catch (e) {}
+                }
+                if (pageId === 'pageOther') _renderOtherText(null);
+            }
+
+            // ================================================================
+            // 10.6 Android 返回键（HBuilderX 5+ 容器）
+            //   优先级：弹窗/设置面板/聊天面板 → 应用内路由栈回退 → 首页退出
+            // ================================================================
+            function _modalActive(el) {
+                return !!(el && el.classList.contains('active'));
+            }
+            function _clickById(id) {
+                const el = document.getElementById(id);
+                if (el) { el.click(); return true; }
+                return false;
+            }
+
+            function _handleAndroidBack() {
+                // 1) 最上层的全局弹窗（裁剪/添加好友/插件安装/关于/备注/确认/预览）
+                if (_modalActive(document.getElementById('remarkModal'))) { closeRemarkModal(); return; }
+                if (_modalActive(_confirmModal)) { _closeConfirm(false); return; }
+                if (_modalActive(previewModal)) { closePreview(); return; }
+                if (_modalActive(document.getElementById('cropModal'))) { _clickById('cropCancelBtn'); return; }
+                if (_modalActive(document.getElementById('addFriendModal'))) { _clickById('addFriendCancelBtn'); return; }
+                if (_modalActive(document.getElementById('pluginInstallModal'))) { _clickById('piCloseBtn'); return; }
+                if (_modalActive(document.getElementById('aboutModal'))) { _clickById('aboutCloseBtn'); return; }
+                // 2) 聊天设置页
+                if (settingsMenu.classList.contains('active')) { closeChatSettings(); return; }
+                // 3) 聊天面板内部的层级（录音/搜索/消息菜单/扩展面板 → 最后关闭聊天）
+                if (_chatIsOpen()) {
+                    if (recordPanel.classList.contains('active')) {
+                        try { stopRecording(true); showToast('已取消录音'); } catch (e) {}
+                        return;
+                    }
+                    if (searchBar.classList.contains('active')) {
+                        searchBar.classList.remove('active');
+                        searchInput.value = '';
+                        chatMessages.querySelectorAll('.msg.highlight').forEach(el => el.classList.remove('highlight'));
+                        return;
+                    }
+                    if (msgMenu.classList.contains('show')) { hideMsgMenu(); return; }
+                    if (extendPanel.classList.contains('open')) { closeExtendPanel(); return; }
+                    closeChat();
+                    return;
+                }
+                // 4) 按应用内 hash 路由栈回退上一页
+                if (_routeStack.length > 1) {
+                    _routeStack.pop();
+                    _gotoRoute(_routeStack[_routeStack.length - 1]);
+                    return;
+                }
+                // 5) 不在首页 → 先回首页（再按一次才退出）
+                if ((_hashApplied || 'sessions') !== 'sessions') {
+                    switchPage('pageSessions');
+                    return;
+                }
+                // 6) 首页 → 退出应用
+                try {
+                    if (window.plus && plus.runtime && typeof plus.runtime.quit === 'function') plus.runtime.quit();
+                } catch (e) {}
+            }
+
+            function setupAndroidBackButton() {
+                function bind() {
+                    if (!window.plus || !plus.key || !plus.key.addEventListener) return false;
+                    if (window._suchatBackBound) return true;
+                    window._suchatBackBound = true;
+                    plus.key.addEventListener('backbutton', function () {
+                        try { _handleAndroidBack(); } catch (e) { console.warn('[back]', e); }
+                    });
+                    return true;
+                }
+                if (!bind()) document.addEventListener('plusready', bind, false);
             }
 
             const otherBackBtn = document.getElementById('otherBackBtn');
@@ -10909,7 +11135,10 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 _rememberLastChat(sessionId);
                 if (!opts || !opts._silent) {
                     _hashApplied = 'chat/' + encodeURIComponent(sessionId);
-                    if (_hashReady) _writeHash(_hashApplied, false);
+                    if (_hashReady) {
+                        _stackPush(_hashApplied);
+                        _writeHash(_hashApplied, false);
+                    }
                 }
             }
 
@@ -10991,7 +11220,11 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     const activePage = document.querySelector('.page.active');
                     const route = hashForPage(activePage ? activePage.id : 'pageSessions');
                     _hashApplied = route;
-                    if (_hashReady) _writeHash(route, true);
+                    if (_hashReady) {
+                        _stackStripChatLayers();
+                        _stackPush(route);
+                        _writeHash(route, true);
+                    }
                 }
             }
 
@@ -11079,7 +11312,10 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 _rememberLastChat(currentChatId);
                 if (!(opts && opts._silent)) {
                     _hashApplied = 'chat-setting/' + encodeURIComponent(currentChatId);
-                    if (_hashReady) _writeHash(_hashApplied, false);
+                    if (_hashReady) {
+                        _stackPush(_hashApplied);
+                        _writeHash(_hashApplied, false);
+                    }
                 }
             }
             function closeChatSettings(opts) {
@@ -11091,8 +11327,13 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 if (cspList) cspList.style.transform = '';
                 // 关闭设置页 → 回到对应聊天地址（replace，不新增历史）
                 if (!(opts && opts._silent) && currentChatId) {
-                    _hashApplied = 'chat/' + encodeURIComponent(currentChatId);
-                    if (_hashReady) _writeHash(_hashApplied, true);
+                    const chatKey = 'chat/' + encodeURIComponent(currentChatId);
+                    _hashApplied = chatKey;
+                    if (_hashReady) {
+                        _stackStripChatLayers();
+                        _stackPush(chatKey);
+                        _writeHash(chatKey, true);
+                    }
                 }
             }
 
@@ -14743,6 +14984,8 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
             renderAll();
             // 首屏后应用 hash 路由（无 hash 时规范化为 #sessions；无效 hash 回到会话列表）
             try { initHashRouting(); } catch (e) { console.warn('[hash route] 初始化失败:', e); }
+            // Android 返回键：接管容器默认“直接退出”，按弹窗/路由栈/首页优先级处理
+            try { setupAndroidBackButton(); } catch (e) { console.warn('[back] 初始化失败:', e); }
             // PeerJS 脚本不可达时 initPeer() 会抛 ReferenceError 并中断后续初始化，
             // 这里先按需加载脚本，成功后再建 Peer
             if (typeof Peer === 'undefined') {
