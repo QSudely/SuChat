@@ -8172,12 +8172,13 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
 
             // 初始化某个连接的加密握手
             async function cryptoStartHandshake(conn) {
-                if (!conn || !window.crypto || !crypto.subtle) return;
-                if (conn._crypto && conn._crypto.state !== 'fallback') return;
+                if (!conn || !window.crypto || !crypto.subtle) { _flushOpenQueue(conn); return; }
+                if (conn._crypto && conn._crypto.state !== 'fallback') { _flushOpenQueue(conn); return; }
                 try {
                     const generated = await cryptoGenerateKeyPair();
                     if (!generated) {
                         conn._crypto = { state: 'fallback', sendQueue: [] };
+                        _flushOpenQueue(conn);
                         return;
                     }
                     conn._crypto = {
@@ -8193,12 +8194,14 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                             }
                         }, 3000),
                     };
+                    _flushOpenQueue(conn);
                     try {
                         conn.send({ type: 'key_exchange', pubB64: generated.pubB64 });
                     } catch (e) {}
                 } catch (e) {
                     console.warn('[crypto] handshake 启动失败，降级明文:', e);
                     conn._crypto = { state: 'fallback', sendQueue: [] };
+                    _flushOpenQueue(conn);
                 }
             }
 
@@ -8274,7 +8277,9 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
 
             // 加密后真实发送 payload —— 返回 Promise，调用方可 await 确保发送顺序
             async function cryptoEncryptAndSend(conn, payload) {
-                if (!conn || !conn._crypto || conn._crypto.state !== 'ready' || !conn._crypto.aesKey) {
+                // 连接已关闭/尚未 open 时不再调用 PeerJS send，避免触发 NotOpenYet 原始错误
+                if (!conn || !conn.open) return;
+                if (!conn._crypto || conn._crypto.state !== 'ready' || !conn._crypto.aesKey) {
                     // 无加密能力，直接明文发
                     try { conn.send(payload); } catch (e) {}
                     return;
@@ -8327,16 +8332,73 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 try { return JSON.parse(plain); } catch (e) { return null; }
             }
 
+            // 连接错误分类：区分可恢复的瞬时状态与真正失败，避免把 PeerJS 原始英文异常弹给用户
+            function _peerErrorKind(err) {
+                const type = String((err && err.type) || '');
+                const msg = String((err && err.message) || '');
+                if (type === 'not-open-yet' || /Connection is not open/i.test(msg)) return 'not-open';
+                if (type === 'peer-unavailable' || /Could not connect to peer/i.test(msg)) return 'offline';
+                if (type === 'network' || type === 'disconnected' || type === 'server-error' ||
+                    type === 'socket-error' || type === 'socket-closed' || type === 'unavailable-id') return 'transient';
+                if (/timeout|timed out/i.test(msg)) return 'timeout';
+                return 'other';
+            }
+            function _peerErrorText(err) {
+                const kind = _peerErrorKind(err);
+                if (kind === 'offline') return '对方当前不在线';
+                if (kind === 'not-open') return '连接正在建立，请稍后重试';
+                if (kind === 'timeout') return '连接超时，请稍后重试';
+                if (kind === 'transient') return '网络连接不稳定，请稍后重试';
+                return '连接失败，请稍后重试';
+            }
+
+            // 未 open 连接上的业务消息：短暂排队等 open，超时/断开则静默丢弃（心跳等基础包不排队）
+            const SEND_OPEN_WAIT_MS = 8000;
+            const SEND_OPEN_QUEUE_MAX = 20;
+            function _clearOpenQueue(conn) {
+                if (!conn) return;
+                if (conn._openSendTimer) { clearTimeout(conn._openSendTimer); conn._openSendTimer = null; }
+                conn._openSendQueue = null;
+            }
+            function _queueSendUntilOpen(conn, payload) {
+                if (!conn) return false;
+                if (!conn._openSendQueue) conn._openSendQueue = [];
+                if (conn._openSendQueue.length >= SEND_OPEN_QUEUE_MAX) conn._openSendQueue.shift();
+                conn._openSendQueue.push(payload);
+                if (!conn._openSendTimer) {
+                    conn._openSendTimer = setTimeout(function () {
+                        conn._openSendTimer = null;
+                        conn._openSendQueue = null;
+                    }, SEND_OPEN_WAIT_MS);
+                }
+                return true;
+            }
+            function _flushOpenQueue(conn) {
+                if (!conn) return;
+                const q = conn._openSendQueue;
+                _clearOpenQueue(conn);
+                if (!q || !q.length || !conn.open) return;
+                for (let i = 0; i < q.length; i++) {
+                    try { cryptoQueueOrSend(conn, q[i]); } catch (e) {}
+                }
+            }
+
             // ================================================================
             // 4. 工具函数
             // ================================================================
 
             // 统一发送入口：所有 connections[pid].send(payload) 应该走这里，走加密层
             // ignoreCrypto = true 时强制明文（用于握手包/心跳等基础消息）
-            // 返回：true=已发送（明文模式），Promise=加密发送中（await 确保顺序），false=连接不存在
+            // 返回：true=已发送/已排队（明文模式），Promise=加密发送中（await 确保顺序），false=连接不存在或瞬时不可用
             function secureSend(pid, payload, ignoreCrypto) {
                 const conn = connections[pid];
                 if (!conn) return false;
+                if (!conn.open) {
+                    // PeerJS 对未 open 的连接调用 send() 会 emit NotOpenYet 原始错误：
+                    // 心跳等基础包直接跳过；业务消息短暂排队，等 open 后按加密队列顺序补发
+                    if (ignoreCrypto) return false;
+                    return _queueSendUntilOpen(conn, payload);
+                }
                 if (ignoreCrypto) {
                     try { conn.send(payload); return true; } catch (e) { return false; }
                 }
@@ -12694,21 +12756,32 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     conn = peer.connect(targetId, { reliable: true });
                 } catch (err) {
                     pendingConnections.delete(targetId);
-                    showToast('连接失败: ' + ((err && err.message) || '网络异常'));
+                    console.warn('[friend] 创建连接失败:', targetId, (err && err.message) || err);
+                    showToast(_peerErrorText(err));
                     return;
                 }
                 let timeoutTimer = 0;
+                const onConnError = (err) => {
+                    const kind = _peerErrorKind(err);
+                    // NotOpenYet/网络抖动等瞬时状态：连接仍在协商，继续等 open 或超时
+                    if (kind === 'not-open' || kind === 'transient') {
+                        console.warn('[friend] 连接瞬时错误，继续等待:', targetId, kind);
+                        return;
+                    }
+                    clearTimeout(timeoutTimer);
+                    pendingConnections.delete(targetId);
+                    try { conn.close(); } catch (e) {}
+                    console.warn('[friend] 连接失败:', targetId, kind, (err && err.message) || err);
+                    showToast(_peerErrorText(err));
+                };
                 conn.on('open', () => {
                     clearTimeout(timeoutTimer);
                     pendingConnections.delete(targetId);
+                    try { if (typeof conn.off === 'function') conn.off('error', onConnError); } catch (e) {}
                     handleNewConnection(conn);
                     sendRequestData(targetId);
                 });
-                conn.on('error', (err) => {
-                    clearTimeout(timeoutTimer);
-                    pendingConnections.delete(targetId);
-                    showToast('连接失败: ' + ((err && err.message) || '网络异常'));
-                });
+                conn.on('error', onConnError);
                 timeoutTimer = setTimeout(() => {
                     if (pendingConnections.has(targetId)) {
                         pendingConnections.delete(targetId);
@@ -13082,6 +13155,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 cryptoStartHandshake(conn);
                 conn.on('data', (data) => handleIncomingData(data, pid));
                 conn.on('close', () => {
+                    _clearOpenQueue(conn);
                     // 清理该连接的加密会话状态
                     if (conn._crypto) {
                         if (conn._crypto.handshakeTimer) clearTimeout(conn._crypto.handshakeTimer);
@@ -13107,7 +13181,8 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     renderSessions();
                 });
                 conn.on('error', (err) => {
-                    console.warn('连接错误:', pid, err);
+                    console.warn('连接错误:', pid, (err && err.type) || (err && err.message) || err);
+                    _clearOpenQueue(conn);
                     if (connections[pid] === conn) {
                         try { conn.close(); } catch (e) {}
                         delete connections[pid];
@@ -13129,14 +13204,39 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 }
             }
 
+            // 活跃的“正在连接”目标，避免自动心跳重复创建 DataConnection
+            const _connectingPeers = new Set();
             function connectToPeer(targetId) {
                 if (targetId === myPeerId) { showToast('不能连接自己'); return; }
-                if (connections[targetId]) return;
-                const conn = peer.connect(targetId, { reliable: true });
+                if (connections[targetId] || _connectingPeers.has(targetId)) return;
+                // 信令尚未就绪时静默跳过，等下一次心跳/refresh 再试
+                if (!peer || peer.destroyed || !peer.open) return;
+
+                _connectingPeers.add(targetId);
+                let conn;
+                try {
+                    conn = peer.connect(targetId, { reliable: true });
+                } catch (e) {
+                    _connectingPeers.delete(targetId);
+                    console.warn('[peer] 创建连接失败（静默）:', targetId, (e && e.message) || e);
+                    return;
+                }
+                const onError = (err) => {
+                    // 自动重连/心跳链路：只记录，不向用户弹原始英文异常；
+                    // 离线状态由心跳超时与 peer-unavailable 退避逻辑负责
+                    console.warn('[peer] 自动连接错误（静默）:', targetId, (err && err.type) || (err && err.message) || err);
+                };
+                const onClose = () => {
+                    _connectingPeers.delete(targetId);
+                    try { if (typeof conn.off === 'function') conn.off('error', onError); } catch (e) {}
+                };
                 conn.on('open', () => {
+                    _connectingPeers.delete(targetId);
+                    try { if (typeof conn.off === 'function') conn.off('error', onError); } catch (e) {}
                     handleNewConnection(conn);
                 });
-                conn.on('error', (err) => { showToast('连接失败: ' + err.message); });
+                conn.on('close', onClose);
+                conn.on('error', onError);
             }
 
             // ================================================================
@@ -15358,21 +15458,28 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 for (let sid in sessions) {
                     const s = sessions[sid];
                     if (!s || s.type !== 'private' || sid === myPeerId) continue;
-                    if (connections[sid]) continue;
+                    if (connections[sid] || _connectingPeers.has(sid)) continue;
                     // 明确离线的 peer：按指数退避等待，避免每 5 秒重试刷屏（force 也不跳过）
                     const backoff = _peerBackoff[sid];
                     if (backoff && now < backoff.nextAt) continue;
                     if (!force && now - (reconnectCooldown[sid] || 0) < RECONNECT_COOLDOWN_MS) continue;
                     reconnectCooldown[sid] = now;
+                    _connectingPeers.add(sid);
                     try {
                         const conn = peer.connect(sid, { reliable: true });
-                        conn.on('open', () => { _resetPeerBackoff(sid); handleNewConnection(conn); });
+                        conn.on('open', () => {
+                            _connectingPeers.delete(sid);
+                            _resetPeerBackoff(sid);
+                            handleNewConnection(conn);
+                        });
                         conn.on('error', (err) => {
+                            _connectingPeers.delete(sid);
                             // peer-unavailable：对方 ID 当前不在信令服务器上（确实离线）→ 长退避
                             // 其它错误（网络/信令异常）不进入长退避，交给 15 秒冷却快速重试
                             if (err && err.type === 'peer-unavailable') _notePeerUnavailable(sid);
                         });
-                    } catch (e) {}
+                        conn.on('close', () => { _connectingPeers.delete(sid); });
+                    } catch (e) { _connectingPeers.delete(sid); }
                 }
             }
 
@@ -15385,6 +15492,8 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 for (let pid in connections) {
                     const conn = connections[pid];
                     if (!conn) continue;
+                    // 正在 open/重建中的瞬时连接：不补 ping，也不当成死连接关闭
+                    if (!conn.open) continue;
                     if (!conn._lastPongAt) conn._lastPongAt = now;
                     const silentMs = now - conn._lastPongAt;
                     if (!background && silentMs >= HEARTBEAT_STALE_MS) {
@@ -15451,11 +15560,13 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 if (peer && peer.id) {
                     const now = Date.now();
                     for (let sid in sessions) {
-                        if (sessions[sid].type === 'private' && !connections[sid] && sid !== myPeerId) {
+                        if (sessions[sid].type === 'private' && !connections[sid] && !_connectingPeers.has(sid) && sid !== myPeerId) {
                             reconnectCooldown[sid] = now;
+                            _connectingPeers.add(sid);
                             const conn = peer.connect(sid, { reliable: true });
-                            conn.on('open', () => handleNewConnection(conn));
-                            conn.on('error', () => {});
+                            conn.on('open', () => { _connectingPeers.delete(sid); handleNewConnection(conn); });
+                            conn.on('error', () => { _connectingPeers.delete(sid); });
+                            conn.on('close', () => { _connectingPeers.delete(sid); });
                         }
                     }
                 }
