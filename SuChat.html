@@ -2851,6 +2851,89 @@
             background: #2a3a50;
             border-radius: 10px;
         }
+        /* 消息区独立包裹层：让“回到底部”按钮始终位于输入区上方，不遮挡发送区/扩展面板 */
+        .chat-scroll-wrap {
+            position: relative;
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-scroll-wrap .chat-messages {
+            flex: 1;
+            min-height: 0;
+        }
+        .scroll-bottom-btn {
+            position: absolute;
+            right: 16px;
+            bottom: 16px;
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            border: 1px solid var(--c-border-strong);
+            background: linear-gradient(180deg, rgba(42, 53, 72, 0.96), rgba(26, 33, 46, 0.96));
+            color: var(--c-text-2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+            -webkit-backdrop-filter: blur(6px);
+            backdrop-filter: blur(6px);
+            opacity: 0;
+            transform: translateY(8px) scale(0.9);
+            pointer-events: none;
+            transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+            z-index: 10;
+            -webkit-tap-highlight-color: transparent;
+            cursor: pointer;
+        }
+        .scroll-bottom-btn.show {
+            opacity: 1;
+            transform: none;
+            pointer-events: auto;
+        }
+        .scroll-bottom-btn:active {
+            transform: scale(0.9);
+            background: linear-gradient(180deg, rgba(26, 33, 46, 0.96), rgba(20, 26, 36, 0.96));
+        }
+        /* 顺时针旋转 90° 的 “>” 变成向下箭头；用描边绘制，保证各分辨率下清晰 */
+        .scroll-bottom-icon {
+            width: 18px;
+            height: 18px;
+            display: block;
+            transform: rotate(90deg);
+        }
+        @media (hover: hover) {
+            .scroll-bottom-btn:hover {
+                color: var(--c-accent-hover);
+                border-color: var(--c-accent-soft-border);
+            }
+        }
+        html[data-theme="light"] .scroll-bottom-btn {
+            background: linear-gradient(180deg, #ffffff, #f3f6fa);
+            border-color: var(--c-border);
+            color: var(--c-text-3);
+            box-shadow: 0 6px 16px rgba(30, 41, 59, 0.14), inset 0 1px 0 #ffffff;
+        }
+        html[data-theme="light"] .scroll-bottom-btn:active {
+            background: linear-gradient(180deg, #f7f9fc, #eaeef5);
+        }
+        html[data-theme="light"] .scroll-bottom-btn:hover {
+            color: var(--c-accent);
+            border-color: var(--c-accent-soft-border);
+        }
+        @media (max-width: 480px) {
+            .scroll-bottom-btn {
+                right: 14px;
+                bottom: 14px;
+                width: 40px;
+                height: 40px;
+            }
+            .scroll-bottom-icon {
+                width: 17px;
+                height: 17px;
+            }
+        }
 
         .msg {
             display: flex;
@@ -4244,8 +4327,10 @@
                 <button id="searchBtn">查找</button>
                 <button id="searchCloseBtn" style="background:transparent;border:none;color:#8a9bb5;font-size:18px;cursor:pointer;">✕</button>
             </div>
-            <div class="chat-messages" id="chatMessages">
-                        </div>
+            <div class="chat-scroll-wrap">
+                <div class="chat-messages" id="chatMessages"></div>
+                <button class="scroll-bottom-btn" id="scrollBottomBtn" type="button" aria-label="回到底部" title="回到底部"><svg class="scroll-bottom-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5L15 12L9 17.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            </div>
 
             <!-- ===== 消息操作菜单 ===== -->
             <div class="msg-menu" id="msgMenu" style="left: 832px; top: 73px;">
@@ -9219,6 +9304,72 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 }
             }, { passive: true });
 
+            // ---- 回到底部悬浮按钮 ----
+            const scrollBottomBtn = document.getElementById('scrollBottomBtn');
+            const SCROLL_BOTTOM_EDGE = 80;      // 距底 <= 80px 视为“已在底部”
+            const SCROLL_DOWN_TRIGGER = 12;     // 朝底部方向累计滑动 12px 才出现
+            let _scrollLastTop = 0;
+            let _scrollDownAccum = 0;
+            let _scrollBtnLockUntil = 0;
+
+            function _hideScrollBottomBtn() {
+                if (scrollBottomBtn) scrollBottomBtn.classList.remove('show');
+                _scrollDownAccum = 0;
+            }
+            function _showScrollBottomBtn() {
+                if (scrollBottomBtn) scrollBottomBtn.classList.add('show');
+            }
+            // 切换会话 / 进入退出聊天 / 切换账号时复位
+            function _resetScrollBottomBtn() {
+                _hideScrollBottomBtn();
+                _scrollLastTop = chatMessages ? chatMessages.scrollTop : 0;
+                _scrollBtnLockUntil = 0;
+            }
+            function _scrollChatToBottom() {
+                _hideScrollBottomBtn();
+                _scrollBtnLockUntil = Date.now() + 600; // 平滑滚动期间不因中间位置再次出现
+                const target = chatMessages.scrollHeight - chatMessages.clientHeight;
+                try {
+                    if (typeof chatMessages.scrollTo === 'function') {
+                        chatMessages.scrollTo({ top: target, behavior: 'smooth' });
+                    } else {
+                        chatMessages.scrollTop = target;
+                    }
+                } catch (e) {
+                    chatMessages.scrollTop = target;
+                }
+                setTimeout(function () {
+                    _scrollLastTop = chatMessages.scrollTop;
+                    _scrollDownAccum = 0;
+                }, 620);
+            }
+
+            if (scrollBottomBtn) {
+                scrollBottomBtn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    _scrollChatToBottom();
+                });
+            }
+
+            // 触屏滑动与鼠标滚轮都会触发 scroll，用 scrollTop 增量判断方向
+            chatMessages.addEventListener('scroll', function () {
+                if (!currentChatId || !chatOverlay.classList.contains('active')) {
+                    _hideScrollBottomBtn();
+                    return;
+                }
+                const st = chatMessages.scrollTop;
+                const delta = st - _scrollLastTop;
+                _scrollLastTop = st;
+                if (delta > 0) _scrollDownAccum += delta;
+                else if (delta < 0) _scrollDownAccum = 0;
+
+                const distanceToBottom = chatMessages.scrollHeight - st - chatMessages.clientHeight;
+                if (distanceToBottom <= SCROLL_BOTTOM_EDGE) { _hideScrollBottomBtn(); return; }
+                if (Date.now() < _scrollBtnLockUntil) return;
+                if (delta < 0) { _hideScrollBottomBtn(); return; } // 向上滑（看历史）立即隐藏
+                if (_scrollDownAccum >= SCROLL_DOWN_TRIGGER) _showScrollBottomBtn();
+            }, { passive: true });
+
             // ================================================================
             // 5. 消息操作菜单
             // ================================================================
@@ -11186,11 +11337,13 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 // 【P0】拆开同步做的"显示 + 渲染 + 背景 + save"，避免同一帧挤 layout thrashing
                 // Step 1: 先只切 display/flex（轻操作，这一帧只让浏览器先把 overlay 放出来）
                 chatOverlay.classList.add('active');
+                _resetScrollBottomBtn();
 
                 // Step 2: 下一帧再渲染消息（避免和 overlay 首次 layout + backdrop-filter 合成层创建争用）
                 // （进入聊天不再自动聚焦输入框，手机端不再强制升输入法，键盘布局自然也不抖）
                 requestAnimationFrame(() => {
                     renderChatMessages(sessionId, true);
+                    _resetScrollBottomBtn();
                     // Step 3: 再下一帧再应用背景（backgroundImage decode + 背景图重绘最耗时，往后推）
                     requestAnimationFrame(() => {
                         applyChatBackground(sessionId);
@@ -11281,6 +11434,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
             function closeChat(opts) {
                 chatOverlay.classList.remove('active');
                 currentChatId = null;
+                _resetScrollBottomBtn();
                 settingsMenu.classList.remove('active');
                 // 先恢复底部导航：后续清理步骤即使抛异常，也不能让导航栏停在 display:none
                 restoreBottomNav();
@@ -14101,6 +14255,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     try { PluginManager.initAll(); } catch (e) {}
                     if (!myAvatar) myAvatar = getDefaultAvatar(myName);
                     chatOverlay.classList.remove('active');
+                    _resetScrollBottomBtn();
                     settingsMenu.classList.remove('active');
                     searchBar.classList.remove('active');
                     restoreBottomNav();
@@ -14153,6 +14308,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 await saveData({ immediate: true });
                 // UI
                 chatOverlay.classList.remove('active');
+                _resetScrollBottomBtn();
                 settingsMenu.classList.remove('active');
                 searchBar.classList.remove('active');
                 restoreBottomNav();
