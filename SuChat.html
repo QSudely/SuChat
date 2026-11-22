@@ -6606,9 +6606,16 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                         const uninstallEl = e.target.closest('[data-spcuninstall]');
                         if (toggleEl) {
                             const pid = toggleEl.dataset.spctoggle;
-                            await PluginManager.togglePlugin(pid);
-                            saveData();
-                            await renderFileMgrTab('plugins');
+                            try {
+                                await PluginManager.togglePlugin(pid);
+                            } catch (err) {
+                                console.warn('[Plugin.toggle] handler failed:', err);
+                                showToast('❌ 插件操作失败，请重试');
+                            } finally {
+                                // 无论启用流程是否异常，都重渲染列表，确保展示的是最新 enabled 状态
+                                saveData();
+                                try { await renderFileMgrTab('plugins'); } catch (err) { console.warn('[renderFileMgrTab] error:', err); }
+                            }
                             return;
                         }
                         if (exportEl) {
@@ -6984,6 +6991,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 };
                 const _pluginApiCache = new Map(); // pluginId -> api object
                 const _grantedHttp = new Set(); // pluginIds with granted HTTP
+                const _togglePending = new Set(); // pluginIds with an in-flight enable/disable flow
                 const _grantedNotify = new Set();
                 const PLUGIN_STORAGE_PREFIX = 'suchat_plug_store:';
 
@@ -7000,6 +7008,12 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                         confirmText: '允许',
                         cancelText: '拒绝',
                     }));
+                }
+
+                // 刷新扩展 UI：任何单个刷新异常都不能影响插件状态落库与列表重渲染
+                function _refreshExtUiSafe() {
+                    try { _refreshToolbarExtensions(); } catch (e) { console.warn('[Plugin] toolbar refresh failed', e); }
+                    try { _refreshBottomNavExtensions(); } catch (e) { console.warn('[Plugin] bottom nav refresh failed', e); }
                 }
 
                 function _uid(prefix) {
@@ -7519,8 +7533,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                             record.enabled = false;
                             console.log('%c[Plugin.install] 用户拒绝网络授权，插件保持关闭', 'color:#fa8c16;font-weight:700;', `id=${meta.id}`);
                             saveData();
-                            _refreshToolbarExtensions();
-                            _refreshBottomNavExtensions();
+                            _refreshExtUiSafe();
                             if (showErrorToast) showToast('插件「' + meta.name + '」已安装（未开启）');
                             return record;
                         }
@@ -7532,14 +7545,12 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                             // 插件代码执行失败，仍然记录（方便用户在管理页查看/修改/重新启用），但不打成功 toast
                             saveData();
                             // 显式刷新一次 UI，确保失败也不会留下脏状态
-                            _refreshToolbarExtensions();
-                            _refreshBottomNavExtensions();
+                            _refreshExtUiSafe();
                             return record; // 返回记录，让调用方也能统计失败
                         }
                         saveData();
                         // 安装成功后显式刷新（即使 registerBottomNav 内部已刷新，这里再做一次兜底，防止插件未注册导航时也保持一致）
-                        _refreshToolbarExtensions();
-                        _refreshBottomNavExtensions();
+                        _refreshExtUiSafe();
                         console.log(
                             '%c[Plugin.install] ✅ 完成',
                             'color:#52c41a;font-weight:700;',
@@ -7571,8 +7582,7 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     } catch (e) {}
                     _pluginsData.splice(idx, 1);
                     saveData();
-                    _refreshToolbarExtensions();
-                    _refreshBottomNavExtensions();
+                    _refreshExtUiSafe();
                     // 顺手移除之前创建的插件扩展页面 DOM，避免残留
                     try {
                         const pgs = document.querySelectorAll('.page.plugin-page');
@@ -7584,6 +7594,13 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 }
 
                 async function togglePlugin(pluginId, enabled) {
+                    // 同一插件的并发/重复点击只处理一次，避免确认弹窗被重复打开、Promise 被覆盖
+                    if (_togglePending.has(pluginId)) {
+                        console.log('%c[Plugin.toggle] 忽略并发开关', 'color:#fa8c16;font-weight:600;', `id=${pluginId}`);
+                        return false;
+                    }
+                    _togglePending.add(pluginId);
+                    try {
                     const p = _pluginsData.find(x => x.id === pluginId);
                     if (!p) return false;
                     const shouldEnable = (typeof enabled === 'boolean') ? enabled : !p.enabled;
@@ -7603,13 +7620,11 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                         }
                         if (_loadPlugin(p)) { p.enabled = true; changed = true; }
                         else {
-                            // 启用失败则插件仍为关闭，本次授权随之作废
-                            if (_needHttpGrant(p)) {
-                                p.httpGranted = false;
-                                _grantedHttp.delete(pluginId);
-                                changed = true;
-                            }
-                            console.warn('[Plugin.toggle] enable failed (exec returned false)');
+                            // 用户已允许，启用状态按用户意图落库；代码执行失败只提示，不回滚成“未开启”，避免无法解释的禁用与循环询问
+                            p.enabled = true;
+                            changed = true;
+                            console.warn('[Plugin.toggle] enable exec failed, keep enabled=true');
+                            try { showToast('⚠️ 插件「' + p.name + '」已启用，但代码执行失败'); } catch (_) {}
                         }
                     } else if (!shouldEnable && p.enabled) {
                         // 关闭即作废本次启用的网络授权：持久化记录与内存态都要清，下次开启重新确认
@@ -7626,11 +7641,14 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     }
                     if (changed) {
                         saveData();
-                        _refreshToolbarExtensions();
-                        _refreshBottomNavExtensions();
+                        // 刷新扩展 UI 失败不能影响插件启用状态与后续列表重渲染
+                        _refreshExtUiSafe();
                     }
                     console.log('%c[Plugin.toggle] ✅ 结束', 'color:#52c41a;font-weight:700;', `id=${pluginId} nowEnabled=${p.enabled} changed=${changed}`);
                     return p.enabled;
+                    } finally {
+                        _togglePending.delete(pluginId);
+                    }
                 }
 
                 // 刷新工具栏扩展按钮（加号面板 - 文件 tab 内 或 输入框上方）
@@ -13678,7 +13696,9 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                                                         showToast(record.enabled === false
                                                             ? '插件已安装但未开启：' + recName
                                                             : '插件已安装：' + recName);
-                                                        renderSettings && renderSettings();
+                                                        try { renderSettings && renderSettings(); } catch (e) { console.warn('[auto-install-plugin] renderSettings failed', e); }
+                                                        // 若文件管理正停在插件页，同步刷新列表与开关状态
+                                                        try { await _piRefreshPlugins(); } catch (e) { console.warn('[auto-install-plugin] refresh plugins failed', e); }
                                                     }
                                                 } catch (e) {
                                                     console.warn('[auto-install-plugin]', fName, e);
