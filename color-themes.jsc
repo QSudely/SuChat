@@ -1,0 +1,574 @@
+/**
+ * SuChat 插件：多彩主题
+ *
+ * 提供 6 套色彩主题（赤红、蔚蓝、林绿、谜紫、橙黄、幻粉），
+ * 每套均含暗色 / 亮色双模配色，自动跟随宿主明暗主题切换。
+ * 在个人主页「主题」区域下方「色彩」行选择即可。
+ *
+ * @id          suchat-plugin-color-themes
+ * @name        多彩主题
+ * @version     1.1.0
+ * @author      SuChat
+ * @desc        6 套色彩主题（赤红/蔚蓝/林绿/谜紫/橙黄/幻粉），自动适配明暗色主题
+ * @permissions storage
+ */
+(function (SuChatPlugin) {
+    'use strict';
+
+    var STYLE_ID = '__suchat_color_themes__';
+    var PICKER_ID = '__suchat_color_picker__';
+    var PICKER_STYLE_ID = '__suchat_color_picker_style__';
+    var STORAGE_KEY = 'active_color';
+
+    /* ========================================================
+     *  通用变量（各色彩主题共用，不随色彩变化）
+     * ====================================================== */
+    var COMMON_DARK = {
+        'danger': '#e74c5e', 'success': '#4cd9a0', 'warning': '#f39c12',
+        'danger-2': '#f28b82',
+        'danger-soft-bg': 'rgba(231,76,94,0.15)',
+        'danger-soft-border': 'rgba(231,76,94,0.3)',
+        'online': '#4cd9a0'
+    };
+    var COMMON_LIGHT = {
+        'danger': '#dc3545', 'success': '#15a877', 'warning': '#e27900',
+        'danger-2': '#c9382f',
+        'danger-soft-bg': 'rgba(220,53,69,0.12)',
+        'danger-soft-border': 'rgba(220,53,69,0.25)',
+        'online': '#15a877'
+    };
+
+    /* ========================================================
+     *  6 套色彩配色数据
+     *  v  = CSS 变量（色彩特有部分）
+     *  s1 = self 气泡渐变起色  s2 = self 气泡渐变止色
+     *  sb = scrollbar 色      sbh = scrollbar hover 色
+     *  rgb = accent 色 RGB 串（用于 rgba 阴影）
+     * ====================================================== */
+    var PALETTES = {
+        crimson: {
+            label: '赤红', icon: '🔴',
+            dotGrad: 'linear-gradient(135deg,#ff4d5e,#ff8896)',
+            dark: {
+                v: {
+                    'bg-page':'#0d0608','bg-app':'#160a0e','bg-card':'#1d0e13','bg-card-2':'#211015',
+                    'bg-panel':'#2d161c','bg-hover':'#301a20','bg-menu':'#1d0e13','bg-input':'#0d0608',
+                    'border':'#3a1f28','border-soft':'rgba(120,40,55,0.15)','border-strong':'#4a2a35',
+                    'accent':'#ff4d5e','accent-hover':'#ff6b7a','accent-active':'#e63a4b','on-accent':'#fff',
+                    'accent-soft-bg':'rgba(255,77,94,0.15)','accent-soft-border':'rgba(255,77,94,0.28)',
+                    'text':'#fae8ea','text-2':'#e0c8cc','text-3':'#a88a90','text-muted':'#6a4a52',
+                    'text-faint':'#5a4048','text-brand':'#ff8a96','text-brand-2':'#ff6b7a',
+                    'icon':'#6a3a45','icon-2':'#8a5a65','overlay':'rgba(20,0,5,0.6)'
+                },
+                s1:'#ff4d5e', s2:'#ff6b7a', sb:'#5a2530', sbh:'#6a3040', rgb:'255,77,94'
+            },
+            light: {
+                v: {
+                    'bg-page':'#fff5f6','bg-app':'#fffafa','bg-card':'#fff','bg-card-2':'#fff0f2',
+                    'bg-panel':'#ffe6ea','bg-hover':'#ffdce2','bg-menu':'#fff','bg-input':'#fff5f6',
+                    'border':'#ffc4ce','border-soft':'rgba(224,53,75,0.10)','border-strong':'#ff9bb0',
+                    'accent':'#e0354b','accent-hover':'#c92842','accent-active':'#b01e36','on-accent':'#fff',
+                    'accent-soft-bg':'rgba(224,53,75,0.12)','accent-soft-border':'rgba(224,53,75,0.25)',
+                    'text':'#2a0a12','text-2':'#4a1822','text-3':'#6e2a36','text-muted':'#9a4a58',
+                    'text-faint':'#b86a78','text-brand':'#c92842','text-brand-2':'#e0354b',
+                    'icon':'#8a4a55','icon-2':'#a86a75','overlay':'rgba(120,0,20,0.35)'
+                },
+                s1:'#e0354b', s2:'#ff4d5e', sb:'#e8a0b0', sbh:'#dc8090', rgb:'224,53,75'
+            }
+        },
+        azure: {
+            label: '蔚蓝', icon: '🔵',
+            dotGrad: 'linear-gradient(135deg,#4d9fff,#8ac4ff)',
+            dark: {
+                v: {
+                    'bg-page':'#050b14','bg-app':'#0a1422','bg-card':'#0f1a2a','bg-card-2':'#0f1c30',
+                    'bg-panel':'#1a2840','bg-hover':'#1a2e48','bg-menu':'#0f1a2a','bg-input':'#050b14',
+                    'border':'#1e3050','border-soft':'rgba(40,80,140,0.15)','border-strong':'#2a4060',
+                    'accent':'#4d9fff','accent-hover':'#6db5ff','accent-active':'#3a8eef','on-accent':'#050b14',
+                    'accent-soft-bg':'rgba(77,159,255,0.15)','accent-soft-border':'rgba(77,159,255,0.28)',
+                    'text':'#e8f0fa','text-2':'#c4d4e8','text-3':'#8a9bb5','text-muted':'#4a6080',
+                    'text-faint':'#40506a','text-brand':'#8ac4ff','text-brand-2':'#6db5ff',
+                    'icon':'#3a5070','icon-2':'#5a7090','overlay':'rgba(0,5,20,0.6)'
+                },
+                s1:'#4d9fff', s2:'#6db5ff', sb:'#1e3050', sbh:'#2a4060', rgb:'77,159,255'
+            },
+            light: {
+                v: {
+                    'bg-page':'#f0f6ff','bg-app':'#f8fbff','bg-card':'#fff','bg-card-2':'#eef4ff',
+                    'bg-panel':'#e0ecff','bg-hover':'#d4e4fa','bg-menu':'#fff','bg-input':'#f0f6ff',
+                    'border':'#c4d8f0','border-soft':'rgba(43,127,255,0.10)','border-strong':'#9bc0ef',
+                    'accent':'#2b7fff','accent-hover':'#1860e6','accent-active':'#0f4dcc','on-accent':'#fff',
+                    'accent-soft-bg':'rgba(43,127,255,0.12)','accent-soft-border':'rgba(43,127,255,0.25)',
+                    'text':'#08121f','text-2':'#142240','text-3':'#2a4060','text-muted':'#5070a0',
+                    'text-faint':'#7090c0','text-brand':'#1860e6','text-brand-2':'#2b7fff',
+                    'icon':'#5070a0','icon-2':'#7090c0','overlay':'rgba(0,20,60,0.35)'
+                },
+                s1:'#2b7fff', s2:'#4d9fff', sb:'#a0c0e8', sbh:'#8aacd8', rgb:'43,127,255'
+            }
+        },
+        forest: {
+            label: '林绿', icon: '🟢',
+            dotGrad: 'linear-gradient(135deg,#3dd97a,#7ae0a0)',
+            dark: {
+                v: {
+                    'bg-page':'#050e08','bg-app':'#081410','bg-card':'#0c1a14','bg-card-2':'#0c1c16',
+                    'bg-panel':'#142820','bg-hover':'#142e24','bg-menu':'#0c1a14','bg-input':'#050e08',
+                    'border':'#1a3528','border-soft':'rgba(30,100,60,0.15)','border-strong':'#244538',
+                    'accent':'#3dd97a','accent-hover':'#5ce890','accent-active':'#2bc868','on-accent':'#050e08',
+                    'accent-soft-bg':'rgba(61,217,122,0.15)','accent-soft-border':'rgba(61,217,122,0.28)',
+                    'text':'#e8f5ec','text-2':'#c4dcc8','text-3':'#8aa890','text-muted':'#4a6a52',
+                    'text-faint':'#405a48','text-brand':'#7ae0a0','text-brand-2':'#5ce890',
+                    'icon':'#385a45','icon-2':'#587a65','overlay':'rgba(0,15,5,0.6)'
+                },
+                s1:'#3dd97a', s2:'#5ce890', sb:'#1a3528', sbh:'#244538', rgb:'61,217,122'
+            },
+            light: {
+                v: {
+                    'bg-page':'#f0faf3','bg-app':'#f6fdf8','bg-card':'#fff','bg-card-2':'#eaf6ee',
+                    'bg-panel':'#d8f0e0','bg-hover':'#cce6d6','bg-menu':'#fff','bg-input':'#f0faf3',
+                    'border':'#c0dcc8','border-soft':'rgba(30,168,90,0.10)','border-strong':'#90c8a4',
+                    'accent':'#1ea85a','accent-hover':'#159048','accent-active':'#0f7838','on-accent':'#fff',
+                    'accent-soft-bg':'rgba(30,168,90,0.12)','accent-soft-border':'rgba(30,168,90,0.25)',
+                    'text':'#06180c','text-2':'#0c2818','text-3':'#1a4028','text-muted':'#408060',
+                    'text-faint':'#60a080','text-brand':'#159048','text-brand-2':'#1ea85a',
+                    'icon':'#408060','icon-2':'#60a080','overlay':'rgba(0,40,10,0.35)'
+                },
+                s1:'#1ea85a', s2:'#3dd97a', sb:'#a0c8b0', sbh:'#88b898', rgb:'30,168,90'
+            }
+        },
+        mystic: {
+            label: '谜紫', icon: '🟣',
+            dotGrad: 'linear-gradient(135deg,#a87cff,#c4a8ff)',
+            dark: {
+                v: {
+                    'bg-page':'#0a0614','bg-app':'#100a1e','bg-card':'#160e28','bg-card-2':'#18102e',
+                    'bg-panel':'#241840','bg-hover':'#241c44','bg-menu':'#160e28','bg-input':'#0a0614',
+                    'border':'#2a1c48','border-soft':'rgba(100,50,160,0.15)','border-strong':'#382858',
+                    'accent':'#a87cff','accent-hover':'#bc94ff','accent-active':'#946aef','on-accent':'#0a0614',
+                    'accent-soft-bg':'rgba(168,124,255,0.15)','accent-soft-border':'rgba(168,124,255,0.28)',
+                    'text':'#f0e8fa','text-2':'#d0c4e4','text-3':'#9a8ab5','text-muted':'#5a4a78',
+                    'text-faint':'#50406a','text-brand':'#c4a8ff','text-brand-2':'#bc94ff',
+                    'icon':'#483868','icon-2':'#685888','overlay':'rgba(8,0,20,0.6)'
+                },
+                s1:'#a87cff', s2:'#bc94ff', sb:'#2a1c48', sbh:'#382858', rgb:'168,124,255'
+            },
+            light: {
+                v: {
+                    'bg-page':'#f5f0ff','bg-app':'#faf8ff','bg-card':'#fff','bg-card-2':'#f0eaff',
+                    'bg-panel':'#e4d8f5','bg-hover':'#d8ccf0','bg-menu':'#fff','bg-input':'#f5f0ff',
+                    'border':'#d0c0e8','border-soft':'rgba(124,58,255,0.10)','border-strong':'#a890d8',
+                    'accent':'#7c3aff','accent-hover':'#6a1ee6','accent-active':'#5a0ecc','on-accent':'#fff',
+                    'accent-soft-bg':'rgba(124,58,255,0.12)','accent-soft-border':'rgba(124,58,255,0.25)',
+                    'text':'#0e0620','text-2':'#1c1038','text-3':'#2e2050','text-muted':'#584880',
+                    'text-faint':'#7868a0','text-brand':'#6a1ee6','text-brand-2':'#7c3aff',
+                    'icon':'#584880','icon-2':'#7868a0','overlay':'rgba(20,0,60,0.35)'
+                },
+                s1:'#7c3aff', s2:'#946aef', sb:'#b8a0d8', sbh:'#a48cc8', rgb:'124,58,255'
+            }
+        },
+        amber: {
+            label: '橙黄', icon: '🟠',
+            dotGrad: 'linear-gradient(135deg,#ffab2e,#ffc861)',
+            dark: {
+                v: {
+                    'bg-page':'#0e0904','bg-app':'#140d05','bg-card':'#1a1208','bg-card-2':'#1c140a',
+                    'bg-panel':'#281c0e','bg-hover':'#2a1f12','bg-menu':'#1a1208','bg-input':'#0e0904',
+                    'border':'#362818','border-soft':'rgba(160,110,30,0.15)','border-strong':'#443422',
+                    'accent':'#ffab2e','accent-hover':'#ffc258','accent-active':'#ef9515','on-accent':'#140d05',
+                    'accent-soft-bg':'rgba(255,171,46,0.15)','accent-soft-border':'rgba(255,171,46,0.28)',
+                    'text':'#faf0e0','text-2':'#e0d0b8','text-3':'#a89880','text-muted':'#6a5c48',
+                    'text-faint':'#5c5040','text-brand':'#ffc861','text-brand-2':'#ffb84a',
+                    'icon':'#584830','icon-2':'#786850','overlay':'rgba(20,10,0,0.6)'
+                },
+                s1:'#ffab2e', s2:'#ffc258', sb:'#40301a', sbh:'#4c3a22', rgb:'255,171,46'
+            },
+            light: {
+                v: {
+                    'bg-page':'#fff8ec','bg-app':'#fffcf4','bg-card':'#fff','bg-card-2':'#fff2dc',
+                    'bg-panel':'#ffe8c4','bg-hover':'#ffe0b8','bg-menu':'#fff','bg-input':'#fff8ec',
+                    'border':'#f0d0a0','border-soft':'rgba(224,137,0,0.10)','border-strong':'#e0b070',
+                    'accent':'#e08900','accent-hover':'#c27600','accent-active':'#a36200','on-accent':'#fff',
+                    'accent-soft-bg':'rgba(224,137,0,0.12)','accent-soft-border':'rgba(224,137,0,0.25)',
+                    'text':'#241505','text-2':'#402810','text-3':'#604020','text-muted':'#906838',
+                    'text-faint':'#b08858','text-brand':'#c27600','text-brand-2':'#e08900',
+                    'icon':'#906838','icon-2':'#b08858','overlay':'rgba(60,30,0,0.35)'
+                },
+                s1:'#e08900', s2:'#ffab2e', sb:'#e0bc84', sbh:'#d0a868', rgb:'224,137,0'
+            }
+        },
+        phantom: {
+            label: '幻粉', icon: '🌸',
+            dotGrad: 'linear-gradient(135deg,#ff6bb0,#ff9cc8)',
+            dark: {
+                v: {
+                    'bg-page':'#0e060c','bg-app':'#140a12','bg-card':'#1a0e18','bg-card-2':'#1c0e1c',
+                    'bg-panel':'#281828','bg-hover':'#281c2c','bg-menu':'#1a0e18','bg-input':'#0e060c',
+                    'border':'#2e1c30','border-soft':'rgba(140,40,90,0.15)','border-strong':'#3c2840',
+                    'accent':'#ff6bb0','accent-hover':'#ff88c4','accent-active':'#ef58a0','on-accent':'#0e060c',
+                    'accent-soft-bg':'rgba(255,107,176,0.15)','accent-soft-border':'rgba(255,107,176,0.28)',
+                    'text':'#fae8f0','text-2':'#dcc4d8','text-3':'#b08aa8','text-muted':'#784a68',
+                    'text-faint':'#6a4058','text-brand':'#ff9cc8','text-brand-2':'#ff88c4',
+                    'icon':'#483048','icon-2':'#685068','overlay':'rgba(15,0,10,0.6)'
+                },
+                s1:'#ff6bb0', s2:'#ff88c4', sb:'#2e1c30', sbh:'#3c2840', rgb:'255,107,176'
+            },
+            light: {
+                v: {
+                    'bg-page':'#fff0f6','bg-app':'#fff8fb','bg-card':'#fff','bg-card-2':'#ffeaf2',
+                    'bg-panel':'#ffd6e6','bg-hover':'#ffcce0','bg-menu':'#fff','bg-input':'#fff0f6',
+                    'border':'#ffc0d8','border-soft':'rgba(255,77,157,0.10)','border-strong':'#ff9cc0',
+                    'accent':'#ff4d9d','accent-hover':'#e6358a','accent-active':'#cc2078','on-accent':'#fff',
+                    'accent-soft-bg':'rgba(255,77,157,0.12)','accent-soft-border':'rgba(255,77,157,0.25)',
+                    'text':'#200812','text-2':'#3a1020','text-3':'#582040','text-muted':'#904070',
+                    'text-faint':'#b06090','text-brand':'#e6358a','text-brand-2':'#ff4d9d',
+                    'icon':'#904070','icon-2':'#b06090','overlay':'rgba(80,0,40,0.35)'
+                },
+                s1:'#ff4d9d', s2:'#ff6bb0', sb:'#e8a0c8', sbh:'#d88cb8', rgb:'255,77,157'
+            }
+        }
+    };
+
+    /* ========================================================
+     *  工具函数
+     * ====================================================== */
+    function merge(a, b) {
+        var r = {};
+        for (var k in a) r[k] = a[k];
+        for (var k in b) r[k] = b[k];
+        return r;
+    }
+
+    function showToast(msg) {
+        try { SuChatPlugin.toast(msg); return; } catch (e) {}
+        var t = document.createElement('div');
+        t.textContent = msg;
+        t.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.75);color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;z-index:99999;pointer-events:none;transition:opacity .3s';
+        document.body.appendChild(t);
+        setTimeout(function () { t.style.opacity = '0'; }, 2000);
+        setTimeout(function () { t.remove(); }, 2400);
+    }
+
+    /* ========================================================
+     *  CSS 生成
+     * ====================================================== */
+
+    /* 生成变量覆盖（暗色 :root + 亮色 :root.light-theme） */
+    function buildVars(p) {
+        var dv = merge(COMMON_DARK, p.dark.v);
+        var lv = merge(COMMON_LIGHT, p.light.v);
+        var lines = [];
+        lines.push(':root {');
+        for (var k in dv) lines.push('  --c-' + k + ': ' + dv[k] + ';');
+        lines.push('}');
+        lines.push(':root.light-theme,');
+        lines.push('html[data-theme="light"] {');
+        for (var k2 in lv) lines.push('  --c-' + k2 + ': ' + lv[k2] + ';');
+        lines.push('}');
+        return lines.join('\n');
+    }
+
+    /* 生成硬编码颜色覆盖（暗色 + 亮色双模） */
+    function buildHardcoded(p) {
+        var d = p.dark, l = p.light;
+        var L = [];
+
+        /* 同时生成暗色 / 亮色两套规则（自动给逗号分隔的每个选择器加前缀） */
+        function dual(sel, darkProps, lightProps) {
+            var sels = sel.split(',').map(function (s) { return s.trim(); });
+            var dSels = sels.map(function (s) { return ':root:not(.light-theme) ' + s; }).join(',\n');
+            var lSels = sels.map(function (s) {
+                return ':root.light-theme ' + s + ', html[data-theme="light"] ' + s;
+            }).join(',\n');
+            L.push(dSels + ' {');
+            darkProps.forEach(function (x) { L.push('  ' + x); });
+            L.push('}');
+            L.push(lSels + ' {');
+            lightProps.forEach(function (x) { L.push('  ' + x); });
+            L.push('}');
+        }
+
+        /* --- 页面 / 聊天背景 --- */
+        dual('.page, .chat-overlay', [
+            'background: radial-gradient(ellipse at 50% 0%, ' + d.v['bg-app'] + ', ' + d.v['bg-page'] + ') !important;'
+        ], [
+            'background: radial-gradient(ellipse at 50% 0%, ' + l.v['bg-app'] + ', ' + l.v['bg-page'] + ') !important;'
+        ]);
+
+        /* --- 头部渐变 --- */
+        dual('#pageSessions .header, #pageRequests .header, .chat-overlay .chat-header', [
+            'background: linear-gradient(180deg, ' + d.v['bg-panel'] + ' 0%, ' + d.v['bg-app'] + ' 100%) !important;',
+            'border-bottom-color: var(--c-border) !important;'
+        ], [
+            'background: linear-gradient(180deg, ' + l.v['bg-panel'] + ' 0%, ' + l.v['bg-app'] + ' 100%) !important;',
+            'border-bottom-color: var(--c-border) !important;'
+        ]);
+
+        /* --- 底部导航栏 --- */
+        dual('.bottom-nav', [
+            'background: linear-gradient(0deg, ' + d.v['bg-panel'] + ' 0%, ' + d.v['bg-app'] + ' 100%) !important;',
+            'border-top-color: var(--c-border) !important;'
+        ], [
+            'background: linear-gradient(0deg, ' + l.v['bg-panel'] + ' 0%, ' + l.v['bg-app'] + ' 100%) !important;',
+            'border-top-color: var(--c-border) !important;'
+        ]);
+
+        /* --- 自己的消息气泡 --- */
+        dual('.chat-bubble.self', [
+            'background: linear-gradient(135deg, ' + d.s1 + ' 0%, ' + d.s2 + ' 100%) !important;',
+            'color: #fff !important;',
+            'box-shadow: 0 4px 16px rgba(' + d.rgb + ',0.35) !important;'
+        ], [
+            'background: linear-gradient(135deg, ' + l.s1 + ' 0%, ' + l.s2 + ' 100%) !important;',
+            'color: #fff !important;',
+            'box-shadow: 0 4px 16px rgba(' + l.rgb + ',0.35) !important;'
+        ]);
+
+        /* --- 对方消息气泡 --- */
+        dual('.chat-bubble.other', [
+            'background: ' + d.v['bg-card'] + ' !important;',
+            'border: 1px solid var(--c-border) !important;',
+            'color: var(--c-text) !important;',
+            'box-shadow: 0 2px 8px rgba(' + d.rgb + ',0.08) !important;'
+        ], [
+            'background: #ffffff !important;',
+            'border: 1px solid var(--c-border) !important;',
+            'color: var(--c-text) !important;',
+            'box-shadow: 0 2px 8px rgba(' + l.rgb + ',0.08) !important;'
+        ]);
+
+        /* --- 滚动条 --- */
+        dual('.scrollbar::-webkit-scrollbar-thumb', [
+            'background: ' + d.sb + ' !important;'
+        ], [
+            'background: ' + l.sb + ' !important;'
+        ]);
+        dual('.scrollbar::-webkit-scrollbar-thumb:hover', [
+            'background: ' + d.sbh + ' !important;'
+        ], [
+            'background: ' + l.sbh + ' !important;'
+        ]);
+
+        /* --- Toast 阴影 --- */
+        dual('.toast', [
+            'background: ' + d.v['bg-card'] + ' !important;',
+            'color: var(--c-text) !important;',
+            'box-shadow: 0 8px 30px rgba(' + d.rgb + ',0.25) !important;'
+        ], [
+            'background: ' + l.v['bg-card'] + ' !important;',
+            'color: var(--c-text) !important;',
+            'box-shadow: 0 8px 30px rgba(' + l.rgb + ',0.25) !important;'
+        ]);
+
+        /* --- 右键菜单 --- */
+        dual('.context-menu', [
+            'background: ' + d.v['bg-menu'] + ' !important;',
+            'border-color: var(--c-border) !important;',
+            'box-shadow: 0 8px 32px rgba(' + d.rgb + ',0.18) !important;'
+        ], [
+            'background: #ffffff !important;',
+            'border-color: var(--c-border) !important;',
+            'box-shadow: 0 8px 32px rgba(' + l.rgb + ',0.18) !important;'
+        ]);
+
+        /* --- 存储 FAB 阴影 --- */
+        dual('.storage-fab', [
+            'box-shadow: 0 4px 16px rgba(' + d.rgb + ',0.4) !important;'
+        ], [
+            'box-shadow: 0 4px 16px rgba(' + l.rgb + ',0.4) !important;'
+        ]);
+
+        /* === 以下用 var() 引用，两种模式自动适配，无需 dual === */
+        var auto = [
+            '.msg.self { background: var(--c-accent-soft-bg) !important; border-color: var(--c-accent-soft-border) !important; }',
+            '.msg.self:hover { background: var(--c-accent-soft-bg) !important; filter: brightness(1.15); }',
+            '.session-item.pinned { background: var(--c-accent-soft-bg) !important; }',
+            '.search-bar input:focus, .input-row .wrap:focus-within, input:focus, textarea:focus { border-color: var(--c-accent) !important; box-shadow: 0 0 0 3px var(--c-accent-soft-bg) !important; }',
+            '.cropper-view-box { outline-color: var(--c-accent) !important; outline: 2px solid var(--c-accent) !important; }'
+        ];
+        auto.forEach(function (r) { L.push(r); });
+
+        return L.join('\n');
+    }
+
+    /* 组合完整 CSS */
+    function buildCSS(paletteId) {
+        var p = PALETTES[paletteId];
+        if (!p) return '';
+        return '/* ' + p.label + ' 主题 */\n' + buildVars(p) + '\n\n' + buildHardcoded(p);
+    }
+
+    /* ========================================================
+     *  主题应用 / 移除
+     * ====================================================== */
+    var _styleEl = null;
+
+    function applyTheme(paletteId) {
+        removeTheme();
+        if (!paletteId || !PALETTES[paletteId]) return;
+        _styleEl = document.createElement('style');
+        _styleEl.id = STYLE_ID;
+        _styleEl.setAttribute('data-plugin-color-theme', paletteId);
+        _styleEl.textContent = buildCSS(paletteId);
+        document.head.appendChild(_styleEl);
+    }
+
+    function removeTheme() {
+        if (_styleEl) { _styleEl.remove(); _styleEl = null; }
+        var ex = document.getElementById(STYLE_ID);
+        if (ex) ex.remove();
+    }
+
+    /* ========================================================
+     *  持久化
+     * ====================================================== */
+    function getCurrent() {
+        try { return SuChatPlugin.storage.get(STORAGE_KEY) || ''; } catch (e) { return ''; }
+    }
+    function setCurrent(id) {
+        try { SuChatPlugin.storage.set(STORAGE_KEY, id); } catch (e) {}
+    }
+
+    /* ========================================================
+     *  色彩选择器 UI
+     * ====================================================== */
+    var PICKER_CSS = [
+        '#' + PICKER_ID + ' { margin-top: 10px; }',
+        '#' + PICKER_ID + ' .cp-title { text-align: center; color: var(--c-text-3); font-size: 13px; margin-bottom: 10px; }',
+        '#' + PICKER_ID + ' .cp-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }',
+        '#' + PICKER_ID + ' .cp-dot {',
+        '  width: 38px; height: 38px; border-radius: 50%;',
+        '  border: 2px solid rgba(128,128,128,0.25);',
+        '  cursor: pointer; position: relative;',
+        '  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;',
+        '  flex-shrink: 0; padding: 0; outline: none;',
+        '}',
+        '#' + PICKER_ID + ' .cp-dot:hover { transform: scale(1.12); }',
+        '#' + PICKER_ID + ' .cp-dot.active {',
+        '  border-color: transparent;',
+        '  box-shadow: 0 0 0 2px var(--c-bg-card), 0 0 0 4px currentColor;',
+        '  transform: scale(1.08);',
+        '}',
+        '#' + PICKER_ID + ' .cp-dot.cp-default {',
+        '  background: linear-gradient(135deg, var(--c-bg-panel), var(--c-bg-hover)) !important;',
+        '  color: var(--c-text-3) !important;',
+        '  display: flex; align-items: center; justify-content: center;',
+        '  font-size: 9px; line-height: 1;',
+        '}',
+        '#' + PICKER_ID + ' .cp-label {',
+        '  text-align: center; margin-top: 8px;',
+        '  font-size: 12px; color: var(--c-text-muted);',
+        '  min-height: 16px;',
+        '}'
+    ].join('\n');
+
+    var _pickerEl = null;
+    var _profileObserver = null;
+
+    function buildPickerHTML() {
+        var dots = '<button type="button" class="cp-dot cp-default" data-color="" title="默认配色">默认</button>';
+        for (var id in PALETTES) {
+            var p = PALETTES[id];
+            dots += '<button type="button" class="cp-dot" data-color="' + id + '"' +
+                ' style="background:' + p.dotGrad + ';color:' + p.dark.v['accent'] + ';"' +
+                ' title="' + p.label + '"></button>';
+        }
+        return '<div class="cp-title">—— 色彩 ——</div>' +
+            '<div class="cp-row">' + dots + '</div>' +
+            '<div class="cp-label"></div>';
+    }
+
+    function syncPickerState() {
+        if (!_pickerEl) return;
+        var current = getCurrent();
+        var dots = _pickerEl.querySelectorAll('.cp-dot');
+        var labelEl = _pickerEl.querySelector('.cp-label');
+        for (var i = 0; i < dots.length; i++) {
+            var d = dots[i];
+            if (d.getAttribute('data-color') === current) {
+                d.classList.add('active');
+            } else {
+                d.classList.remove('active');
+            }
+        }
+        if (labelEl) {
+            labelEl.textContent = current ? (PALETTES[current].icon + ' ' + PALETTES[current].label) : '默认配色';
+        }
+    }
+
+    function injectPicker() {
+        var sw = document.getElementById('themeSwitch');
+        if (!sw) return false;
+        if (document.getElementById(PICKER_ID)) {
+            _pickerEl = document.getElementById(PICKER_ID);
+            syncPickerState();
+            return true;
+        }
+        var div = document.createElement('div');
+        div.id = PICKER_ID;
+        div.innerHTML = buildPickerHTML();
+        sw.parentNode.insertBefore(div, sw.nextSibling);
+        _pickerEl = div;
+
+        div.addEventListener('click', function (e) {
+            var btn = e.target.closest('.cp-dot');
+            if (!btn) return;
+            var colorId = btn.getAttribute('data-color');
+            setCurrent(colorId);
+            if (colorId && PALETTES[colorId]) {
+                applyTheme(colorId);
+                showToast(PALETTES[colorId].icon + ' ' + PALETTES[colorId].label + ' 主题已应用');
+            } else {
+                removeTheme();
+                showToast('🎨 已恢复默认配色');
+            }
+            syncPickerState();
+        });
+        syncPickerState();
+        return true;
+    }
+
+    /* ========================================================
+     *  初始化 & 生命周期
+     * ====================================================== */
+    try {
+        /* 注入选择器样式（始终存在） */
+        var pstyle = document.createElement('style');
+        pstyle.id = PICKER_STYLE_ID;
+        pstyle.textContent = PICKER_CSS;
+        document.head.appendChild(pstyle);
+
+        /* 注入色彩选择器到个人主页 */
+        injectPicker();
+
+        /* DOM 变化监听：宿主可能重新渲染个人主页导致选择器丢失 */
+        _profileObserver = new MutationObserver(function () {
+            if (!document.getElementById(PICKER_ID)) {
+                injectPicker();
+            }
+        });
+        _profileObserver.observe(document.body, { childList: true, subtree: true });
+
+        /* 首次加载：读取偏好并应用 */
+        var saved = getCurrent();
+        if (saved && PALETTES[saved]) {
+            applyTheme(saved);
+        }
+
+        /* 卸载清理 */
+        SuChatPlugin.onUnload(function () {
+            removeTheme();
+            if (_pickerEl) { _pickerEl.remove(); _pickerEl = null; }
+            var ps = document.getElementById(PICKER_STYLE_ID);
+            if (ps) ps.remove();
+            if (_profileObserver) { try { _profileObserver.disconnect(); } catch (_) {} }
+        });
+
+    } catch (e) {
+        console.error('[suchat-plugin-color-themes] init failed:', e);
+        throw e;
+    }
+})(
+    (typeof SuChatPlugin !== 'undefined' && SuChatPlugin) ||
+    (typeof window !== 'undefined' && typeof window.SuChatPlugin !== 'undefined' && window.SuChatPlugin) ||
+    (function () { throw new Error('[suchat-plugin-color-themes] 未找到 SuChatPlugin 宿主 API。'); })()
+);
