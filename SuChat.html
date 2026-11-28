@@ -8599,13 +8599,43 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 return null;
             }
 
+            // ===== 在线判定：以“最近一次确证存活”为准，而不是“connections 里有没有键” =====
+            // 旧实现用 Object.keys(connections) 直接覆盖在线状态：
+            //   · 连接已 open 但尚未收到首个 pong 的 peer 会被判离线；
+            //   · 正在重建/握手中的 peer 没有 connections 键，也会被判离线，
+            //     且 5 秒心跳每次都会把下拉刷新刚刚探测到的“在线”覆盖回“离线”。
+            // 现在改为：连接 open 且心跳未超时 → 在线；否则看最近一次收到对方数据的时间。
+            const _peerLastSeen = Object.create(null); // pid -> 最近一次确证存活的时间戳
+            const ONLINE_SEEN_TTL_MS = 12000;          // 与心跳判死阈值保持一致
+
+            // 收到对方任何数据 / 连接建立 / pong 到达时调用，刷新存活时间
+            function _markPeerAlive(pid) {
+                if (!pid) return;
+                _peerLastSeen[pid] = Date.now();
+                const s = sessions[pid];
+                if (s && s.type === 'private' && s.online !== true) s.online = true;
+            }
+
+            function _peerIsOnline(pid) {
+                const now = Date.now();
+                const conn = connections[pid];
+                if (conn && conn.open) {
+                    // 连接已就绪：以最近一次 pong/user_info 为准；从未收到过则视为在线（刚建立）
+                    const last = conn._lastPongAt || _peerLastSeen[pid] || 0;
+                    if (!last) return true;
+                    return (now - last) < ONLINE_SEEN_TTL_MS;
+                }
+                // 没有可用连接：只要最近 TTL 内收到过对方数据，仍算在线（避免刷新瞬间误判）
+                return (now - (_peerLastSeen[pid] || 0)) < ONLINE_SEEN_TTL_MS;
+            }
+
             function updateOnlineStatus() {
                 // 不再根据 conn.open 清理连接，避免入站连接在握手阶段被误删
                 // 连接的清理交给 close/error 事件和心跳超时机制
-                const onlinePeers = Object.keys(connections);
                 for (let sid in sessions) {
                     if (sessions[sid].type === 'private') {
-                        sessions[sid].online = onlinePeers.includes(sid);
+                        if (sid === myPeerId) continue;
+                        sessions[sid].online = _peerIsOnline(sid);
                     }
                 }
                 renderSessions();
@@ -9849,7 +9879,10 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                         var i = s.indexOf(',');
                         if (i < 0) { reject(new Error('读取文件数据失败')); return; }
                         var mt = /^data:([^;]+)/.exec(s);
-                        resolve({ b64: s.slice(i + 1), mime: (mt && mt[1]) || (blob && blob.type) || '' });
+                        var b64 = s.slice(i + 1);
+                        // 空 base64 会导致“文件建成但 0 字节”，提前报错
+                        if (!b64 || !b64.replace(/\s+/g, '')) { reject(new Error('文件内容为空')); return; }
+                        resolve({ b64: b64, mime: (mt && mt[1]) || (blob && blob.type) || '' });
                     };
                     r.onerror = function () { reject(new Error('读取文件数据失败')); };
                     r.readAsDataURL(blob);
@@ -9944,8 +9977,49 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 return { bin: bin, norm: norm };
             }
 
-            // 写入输出流：优先 DataOutputStream.writeBytes(String)；不可用时再退到 Base64.decode + byte[]
+            // 写入输出流：把二进制字符串（每个字符 0-255）按 ISO-8859-1 原样写成字节
+            // 旧实现用 DataOutputStream.writeBytes(String)：在部分机型/WebView 的 Native.js 下
+            // 该方法不抛错但实际写出 0 字节，导致媒体库记录建成、文件却是 0B。
+            // 现改为 OutputStreamWriter(charset=ISO-8859-1)：Java String 参数桥接稳定，
+            // 且 ISO-8859-1 编码是“一字符一字节”，能字节级还原原始文件。
             function writeBinaryToOutputStream(out, bin, norm) {
+                var CHUNK = 256 * 1024;
+                var started = false;
+                try {
+                    var OutputStreamWriter = plus.android.importClass('java.io.OutputStreamWriter');
+                    if (typeof OutputStreamWriter !== 'function') throw new Error('OutputStreamWriter 不可用');
+                    var writer = new OutputStreamWriter(out, 'ISO-8859-1');
+                    if (!writer) throw new Error('创建写入器失败');
+                    plus.android.importClass(writer);
+                    if (typeof writer.write !== 'function') throw new Error('写入器未桥接');
+                    started = true;
+                    for (var i = 0; i < bin.length; i += CHUNK) {
+                        writer.write(bin.slice(i, i + CHUNK));
+                    }
+                    writer.flush();
+                    writer.close(); // 同时关闭底层输出流
+                    return;
+                } catch (e) {
+                    // 已经写入了一部分就不能换第二种方式重写（会叠内容），直接报错交给上层清理
+                    if (started) throw new Error('写入字节失败（' + normalizeNativeError(e) + '）');
+                }
+                // 兜底 1：String.getBytes(ISO-8859-1) → out.write(byte[])
+                var bytesWritten = false;
+                try {
+                    var JString = plus.android.importClass('java.lang.String');
+                    var js = new JString(bin);
+                    if (js && typeof js.getBytes === 'function') {
+                        var bytes = js.getBytes('ISO-8859-1');
+                        if (bytes) {
+                            out.write(bytes);
+                            out.flush();
+                            out.close();
+                            bytesWritten = true;
+                        }
+                    }
+                } catch (e2) { bytesWritten = false; }
+                if (bytesWritten) return;
+                // 兜底 2：DataOutputStream.writeBytes（历史上可能写出 0 字节，仅作最后尝试，上层会校验大小）
                 var dos = null;
                 try {
                     var DataOutputStream = plus.android.importClass('java.io.DataOutputStream');
@@ -9953,23 +10027,58 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                         dos = new DataOutputStream(out);
                         plus.android.importClass(dos);
                     }
-                } catch (e) { dos = null; }
+                } catch (e3) { dos = null; }
                 if (dos && typeof dos.writeBytes === 'function') {
                     dos.writeBytes(bin);
                     dos.flush();
-                    dos.close(); // 同时关闭底层输出流
+                    dos.close();
                     return;
                 }
                 var Base64 = plus.android.importClass('android.util.Base64');
                 if (!Base64 || typeof Base64.decode !== 'function') throw new Error('Base64 接口不可用');
-                var bytes = Base64.decode(norm, 0);
-                if (!bytes) throw new Error('文件数据解码为空');
+                var rawBytes = Base64.decode(norm, 0);
+                if (!rawBytes) throw new Error('文件数据解码为空');
                 try {
-                    out.write(bytes);
+                    out.write(rawBytes);
                     out.flush();
                     out.close();
-                } catch (e) {
-                    throw new Error('无法写入字节数据（' + normalizeNativeError(e) + '）');
+                } catch (e4) {
+                    throw new Error('无法写入字节数据（' + normalizeNativeError(e4) + '）');
+                }
+            }
+
+            // 读取媒体库条目当前的字节数（-1 表示当前环境拿不到，不做强校验）
+            function getMediaFileSize(resolver, uri) {
+                var pfd = null;
+                try {
+                    if (resolver && typeof resolver.openFileDescriptor === 'function') {
+                        pfd = resolver.openFileDescriptor(uri, 'r');
+                        if (pfd) {
+                            plus.android.importClass(pfd);
+                            var n = pfd.getStatSize();
+                            if (typeof n === 'number' && isFinite(n)) return n;
+                        }
+                    }
+                } catch (e) { /* 继续尝试 query */ }
+                finally {
+                    if (pfd) { try { pfd.close(); } catch (ignore) {} }
+                }
+                // 兜底：query(_size) 读取媒体库记录中的大小
+                var cur = null;
+                try {
+                    if (!resolver || typeof resolver.query !== 'function') return -1;
+                    cur = resolver.query(uri, null, null, null, null);
+                    if (!cur) return -1;
+                    plus.android.importClass(cur);
+                    if (typeof cur.moveToFirst !== 'function' || !cur.moveToFirst()) return -1;
+                    var idx = cur.getColumnIndex('_size');
+                    if (idx < 0) return -1;
+                    var v = cur.getLong(idx);
+                    return (typeof v === 'number' && isFinite(v)) ? v : -1;
+                } catch (e2) {
+                    return -1;
+                } finally {
+                    if (cur) { try { cur.close(); } catch (ignore) {} }
                 }
             }
 
@@ -10030,6 +10139,27 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                                 if (typeof done.put !== 'function') throw new Error('ContentValues.put 未桥接');
                                 done.put('is_pending', 0);
                                 resolver.update(uri, done, null, null);
+
+                                // 写入结果校验：个别机型 Java IO 桥接会“静默写 0 字节”，
+                                // 按真实落盘大小核对；不一致重写一次，仍不一致就报错并删除半成品。
+                                stage = '校验文件大小';
+                                var expected = bin.length;
+                                var actual = getMediaFileSize(resolver, uri);
+                                if (actual >= 0 && actual !== expected) {
+                                    console.warn('[download] 首次写入大小不符（' + actual + 'B / 期望 ' + expected + 'B），重写一次');
+                                    var out2 = resolver.openOutputStream(uri);
+                                    if (!out2) throw new Error('重新打开写入流失败');
+                                    plus.android.importClass(out2);
+                                    writeBinaryToOutputStream(out2, bin, norm);
+                                    out2 = null;
+                                    var actual2 = getMediaFileSize(resolver, uri);
+                                    if (actual2 >= 0 && actual2 !== expected) {
+                                        throw new Error('实际写入 ' + actual2 + ' 字节，应为 ' + expected + ' 字节');
+                                    }
+                                    console.log('[download] 重写成功：' + name + ' ' + expected + 'B');
+                                } else {
+                                    console.log('[download] 写入完成：' + name + ' ' + expected + 'B');
+                                }
                                 resolve();
                                 return;
                             } catch (e) {
@@ -10052,6 +10182,13 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                                 if (!dir.exists()) dir.mkdirs();
                                 var fos = new FileOutputStream(new File(dir, name));
                                 writeBinaryToOutputStream(fos, bin, norm);
+                                // 同样按落盘大小校验，避免 0 字节“成功”
+                                var fobj = new File(dir, name);
+                                plus.android.importClass(fobj);
+                                var len = (typeof fobj.length === 'function') ? fobj.length() : -1;
+                                if (typeof len === 'number' && len >= 0 && len !== bin.length) {
+                                    throw new Error('实际写入 ' + len + ' 字节，应为 ' + bin.length + ' 字节');
+                                }
                                 resolve();
                             } catch (e) {
                                 reject(new Error('写入公共下载目录失败：' + normalizeNativeError(e)));
@@ -13208,6 +13345,8 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     delete connections[pid];
                 }
                 connections[pid] = conn;
+                // 连接建立即证明对方在线（记录存活时间，供在线判定使用）
+                _markPeerAlive(pid);
 
                 // 【下拉刷新在线状态】如果当前在等待这个 peer 连接重建成功的回调，立即触发（标记在线）
                 if (typeof _connRefreshListeners !== 'undefined' && _connRefreshListeners[pid]) {
@@ -13300,16 +13439,31 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     console.warn('[peer] 创建连接失败（静默）:', targetId, (e && e.message) || e);
                     return;
                 }
+                // 连接卡死兜底：既没 open 也没 close/error 时，12s 后自动释放“正在连接”标记，
+                // 否则 _connectingPeers 会永久拦住后续重连（心跳与下拉刷新都拿不到新连接）。
+                const connectWatchdog = setTimeout(() => {
+                    if (conn && !conn.open) {
+                        _connectingPeers.delete(targetId);
+                        try { conn.close(); } catch (e) {}
+                    }
+                }, 12000);
+                const clearWatchdog = () => { clearTimeout(connectWatchdog); };
                 const onError = (err) => {
                     // 自动重连/心跳链路：只记录，不向用户弹原始英文异常；
                     // 离线状态由心跳超时与 peer-unavailable 退避逻辑负责
                     console.warn('[peer] 自动连接错误（静默）:', targetId, (err && err.type) || (err && err.message) || err);
+                    // 关键：error 不一定会再触发 close，这里必须释放“正在连接”，否则后续连接全被跳过
+                    clearWatchdog();
+                    _connectingPeers.delete(targetId);
+                    try { conn.close(); } catch (e) {}
                 };
                 const onClose = () => {
+                    clearWatchdog();
                     _connectingPeers.delete(targetId);
                     try { if (typeof conn.off === 'function') conn.off('error', onError); } catch (e) {}
                 };
                 conn.on('open', () => {
+                    clearWatchdog();
                     _connectingPeers.delete(targetId);
                     try { if (typeof conn.off === 'function') conn.off('error', onError); } catch (e) {}
                     handleNewConnection(conn);
@@ -13325,6 +13479,8 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                 const conn = connections[from];
                 // 收到对方任何数据都证明其在线且可达，清掉离线重连退避
                 _resetPeerBackoff(from);
+                // 记录“最近一次确证存活”，让下拉刷新判定的在线状态不会被心跳覆盖成离线
+                _markPeerAlive(from);
 
                 // ---- 加密握手包（明文处理，不走业务 switch）----
                 if (rawData && rawData.type === 'key_exchange') {
@@ -13817,6 +13973,8 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                     case 'pong':
                         // 心跳回复，刷新“上次成功心跳”时间（断连判定按真实时长计算）
                         if (connections[from]) connections[from]._lastPongAt = Date.now();
+                        // pong 到达即证明对方在线，刷新存活时间（避免心跳把在线覆盖成离线）
+                        _markPeerAlive(from);
                         // 【下拉刷新在线状态】如果当前有一次性 pong 回调，调用它标记该 peer 在线
                         if (typeof _pongRefreshListeners !== 'undefined' && _pongRefreshListeners[from]) {
                             const cb = _pongRefreshListeners[from];
@@ -15293,59 +15451,85 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
             }
 
             // 刷新在线状态（手动下拉触发）：遍历所有会话，检测在线状态
-            //   1) 已有连接 & open → 立即发送 ping(ignoreCrypto)，600ms 内收 pong → 在线
-            //   2) 已有连接但仍在 connecting → 等待连接建立后立即 ping
-            //   3) 没连接 → connectToPeer 尝试重建，1.5s 内连上 → 在线
-            //   整体 1.8s 兜底；最短 UI 停留 450ms
+            //   1) 已有连接 & open → 立即发送 ping(ignoreCrypto)，超时内收 pong → 在线
+            //   2) 已有连接但未 open → 等它就绪；超时则清掉僵死连接并重建一次
+            //   3) 没连接 → connectToPeer 尝试重建，连上即在线（并用 ping 复核）
+            // 关键点：
+            //   · 移动端一次 ping/pong 往返 + WebView 调度可能远超 600ms，超时放宽到 2.5s；
+            //   · 超时必须注销 pong 回调，否则迟到的 pong 会重复计数、让别的会话提前收尾（状态不刷新）；
+            //   · 已有 open 连接时即使 ping 超时也不判离线（连接本身仍可用），避免把在线判成离线。
+            const PING_TO = 2500;
+            const CONNECT_WAIT = 1500;
+            const RECONNECT_TO = 3000;
+            const REFRESH_GUARD_MS = 4200;
+
             function refreshOnlineStatuses(done) {
                 const all = Object.keys(sessions);
                 if (all.length === 0) { done && done(); return; }
                 const minShowMs = 450;
-                const maxWaitMs = 1800;
                 const t0 = Date.now();
                 let settledCount = 0;
+                let finished = false;
                 const total = all.length;
                 function finish() {
+                    if (finished) return;
+                    finished = true;
+                    clearTimeout(guard);
+                    // 收尾时统一按存活模型重算一次，避免个别会话因超时分支留下旧值
+                    updateOnlineStatus();
                     const used = Date.now() - t0;
                     const rem = Math.max(0, minShowMs - used);
                     setTimeout(() => { renderSessions(); done && done(); }, rem);
                 }
                 // 总超时兜底
-                const guard = setTimeout(() => { settledCount = total; finish(); }, maxWaitMs);
-
-                const PING_TO = 600;      // ping 响应超时：快速判断在线
-                const CONNECT_WAIT = 1200; // 等待已有连接打开的时间
-                const RECONNECT_TO = 1500; // 重建连接超时
+                const guard = setTimeout(() => { settledCount = total; finish(); }, REFRESH_GUARD_MS);
 
                 all.forEach(sid => {
-                    if (sid === myPeerId) { settledCount++; if (settledCount >= total) { clearTimeout(guard); finish(); } return; }
-                    const s = sessions[sid];
-                    if (!s) { settledCount++; if (settledCount >= total) { clearTimeout(guard); finish(); } return; }
-
-                    const conn = connections[sid];
                     let pingTimer = 0;
+                    let settled = false;
 
-                    function markOnline() { s.online = true;  _doneOne(); }
-                    function markOffline(){ s.online = false; _doneOne(); }
                     function _doneOne() {
+                        if (settled) return; // 防止 pong 迟到 / 多重分支导致重复计数
+                        settled = true;
                         clearTimeout(pingTimer);
                         settledCount++;
-                        if (settledCount >= total) { clearTimeout(guard); finish(); }
+                        if (settledCount >= total) finish();
+                    }
+
+                    if (sid === myPeerId) { _doneOne(); return; }
+                    const s = sessions[sid];
+                    if (!s) { _doneOne(); return; }
+
+                    const conn = connections[sid];
+                    function markOnline() { _markPeerAlive(sid); s.online = true; _doneOne(); }
+                    // force=false：有可用连接时不因单次 ping 超时判离线
+                    function markOffline(force) {
+                        if (!force && conn && conn.open) { s.online = true; _markPeerAlive(sid); }
+                        else { s.online = false; }
+                        _doneOne();
+                    }
+                    function cleanupPong() {
+                        if (_pongRefreshListeners[sid]) delete _pongRefreshListeners[sid];
                     }
                     function sendPingNow() {
+                        // 先注销旧的（上一次刷新可能遗留），再注册本次回调
+                        cleanupPong();
                         _pongRefreshListeners[sid] = markOnline;
                         try {
                             // ignoreCrypto:true 跳过加密队列，直接明文发送 ping，零延迟
                             const ok = secureSend(sid, { type: 'ping', time: Date.now() }, true);
                             if (!ok) {
-                                delete _pongRefreshListeners[sid];
-                                markOffline();
+                                cleanupPong();
+                                markOffline(false);
                                 return;
                             }
-                            pingTimer = setTimeout(markOffline, PING_TO);
+                            pingTimer = setTimeout(() => {
+                                cleanupPong();
+                                markOffline(false);
+                            }, PING_TO);
                         } catch (e) {
-                            delete _pongRefreshListeners[sid];
-                            markOffline();
+                            cleanupPong();
+                            markOffline(false);
                         }
                     }
 
@@ -15353,49 +15537,57 @@ if(n&&!eM.validateId(n)){this._delayedAbort(E.InvalidID,`ID "${n}" is invalid`);
                         // 已有活跃连接 → 立即发 ping（最快路径）
                         sendPingNow();
                     } else if (conn) {
-                        // 连接存在但未 open（connecting 状态）→ 等它就绪
+                        // 连接存在但未 open（connecting 状态）→ 等它就绪；超时说明连接已僵死
                         let waited = 0;
                         const waitStep = 60;
                         function tryWait() {
+                            if (settled) return;
                             if (conn.open) { sendPingNow(); return; }
                             waited += waitStep;
-                            if (waited >= CONNECT_WAIT) { markOffline(); return; }
-                            // 检查连接是否已失败
                             const state = conn._state || '';
-                            if (state === 'closed' || state === 'error' || state === 'failed') {
-                                markOffline(); return;
+                            const dead = (state === 'closed' || state === 'error' || state === 'failed');
+                            if (waited >= CONNECT_WAIT || dead) {
+                                // 清掉僵死连接，否则心跳与后续刷新都会一直拿到这个不可用连接 → 永久显示离线
+                                try { conn.close(); } catch (e) {}
+                                if (connections[sid] === conn) delete connections[sid];
+                                _connectingPeers.delete(sid);
+                                reconnectOnce();
+                                return;
                             }
                             pingTimer = setTimeout(tryWait, waitStep);
                         }
                         tryWait();
                     } else {
-                        // 无连接 → 尝试重建 WebRTC
+                        reconnectOnce();
+                    }
+
+                    // 无连接（或刚清掉僵死连接）→ 重建一次，连接建立即视为在线
+                    function reconnectOnce() {
                         _connRefreshListeners[sid] = () => {
+                            if (settled) return;
                             clearTimeout(pingTimer);
                             delete _connRefreshListeners[sid];
-                            // 连接建立成功后立即 ping 确认
+                            // 连接建立本身即证明对方在线；再用 ping 复核（不复核也不会误判离线）
+                            markOnline();
                             _pongRefreshListeners[sid] = markOnline;
-                            try {
-                                secureSend(sid, { type: 'ping', time: Date.now() }, true);
-                            } catch (e) {
-                                markOnline(); // 连接本身已证明在线
-                            }
+                            try { secureSend(sid, { type: 'ping', time: Date.now() }, true); } catch (e) {}
                         };
+                        clearTimeout(pingTimer);
                         pingTimer = setTimeout(() => {
                             delete _connRefreshListeners[sid];
-                            markOffline();
+                            markOffline(true);
                         }, RECONNECT_TO);
                         try {
                             connectToPeer(sid);
                         } catch (e) {
                             delete _connRefreshListeners[sid];
                             clearTimeout(pingTimer);
-                            markOffline();
+                            markOffline(true);
                         }
                     }
                 });
                 // 空列表兜底
-                if (settledCount >= total) { clearTimeout(guard); finish(); }
+                if (settledCount >= total) finish();
             }
 
             renderAll();
